@@ -41,7 +41,7 @@ class TelloDron(object):
         self.height_cm = 0             # altura en cm
         self.battery_pct = None        # batería en %
         self.temp_c = None             # temperatura °C (float)
-        self.wifi = None               # calidad enlace (0..100 aprox)
+        self.wifi = None               # calidad enlace de conexión (0..100 aprox)
         self.flight_time_s = 0         # tiempo de vuelo en s
         self.telemetry_ts = None       # marca temporal última actualización
         self.FRAME_FORMAT = "RGB"  # Formato por defecto de los frames de cámara
