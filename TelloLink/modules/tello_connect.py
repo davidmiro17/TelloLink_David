@@ -19,6 +19,16 @@ def _connect(self, freq=5, callback=None, params=None):
         self.state = "connected"
         self.frequency = freq
 
+        # POSE: asegurar objeto y sincronizar Z con barómetro (si ya hubiera altura)
+        try:
+            if not hasattr(self, "pose") or self.pose is None:
+
+                self.pose = self.PoseVirtual()
+            # Sincroniza Z con la altura disponible (si aún no hay telemetría, simplemente quedará en 0.0)
+            self.pose.set_from_telemetry(height_cm=getattr(self, "height_cm", None))
+        except Exception:
+            pass
+
         return True
 
     except Exception as Err: #Si ocurre cualquier error en el try anterior, lo capturamos en la variable 'Err'

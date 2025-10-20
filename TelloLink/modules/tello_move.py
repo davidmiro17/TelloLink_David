@@ -27,6 +27,13 @@ def _move(self, verb, dist_cm):
     resp = self._send(f"{verb} {d}") #Se envia el tipo de verb y su distancia, por ejemplo forward y 50)
     if str(resp).lower() != "ok":   #Si el dron no responde con un "ok", lanzamos ek error
         raise RuntimeError(f"{verb} {d} -> {resp}")
+    #POSE (añadido mínimo): actualizar pose tras OK ---
+    try:
+        pose = getattr(self, "pose", None)
+        if pose is not None:
+            pose.update_move(verb, d)
+    except Exception:
+        pass
     time.sleep(COOLDOWN_S)
     return True
 
@@ -68,6 +75,13 @@ def up(self, dist_cm: int):
     resp = self._send(f"up {d}") #Se manda el comando al Tello
     if str(resp).lower() != "ok": #Si no devuelve "ok"
         raise RuntimeError(f"up {d} -> {resp}") #Lanza error
+    # --- POSE (añadido mínimo): actualizar pose tras OK ---
+    try:
+        pose = getattr(self, "pose", None)
+        if pose is not None:
+            pose.update_move("up", d)
+    except Exception:
+        pass
     time.sleep(COOLDOWN_S)
     return True
 
@@ -83,6 +97,13 @@ def down(self, dist_cm: int): #Función para bajar
     resp = self._send(f"down {d}") #Se manda el comando al Tello
     if str(resp).lower() != "ok": #Si no devuelve "ok"
         raise RuntimeError(f"down {d} -> {resp}") #Lanza error
+    # --- POSE (añadido mínimo): actualizar pose tras OK ---
+    try:
+        pose = getattr(self, "pose", None)
+        if pose is not None:
+            pose.update_move("down", d)
+    except Exception:
+        pass
     time.sleep(COOLDOWN_S)
     return True
 
