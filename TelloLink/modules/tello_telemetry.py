@@ -9,7 +9,6 @@ except Exception:
 
 
 def _telemetry_loop(self, period_s: float):
-
     if not hasattr(self, "_pose_takeoff_synced"):
         self._pose_takeoff_synced = False
 
@@ -33,7 +32,7 @@ def _telemetry_loop(self, period_s: float):
         except Exception:
             pass
 
-        #Yaw (grados)
+        # Yaw (grados)
         try:
             # Primero intentamos get_yaw()
             gy = getattr(self._tello, "get_yaw", None)
@@ -53,7 +52,6 @@ def _telemetry_loop(self, period_s: float):
                         y = None
 
             if y is not None:
-
                 self.yaw_deg = float(y)
                 yaw_val = self.yaw_deg
         except Exception:
@@ -67,7 +65,7 @@ def _telemetry_loop(self, period_s: float):
         except Exception:
             pass
 
-        #Temperatura (°C)
+        # Temperatura (°C)
         try:
             t = self._tello.get_temperature()
             if t is not None:
@@ -91,7 +89,34 @@ def _telemetry_loop(self, period_s: float):
         except Exception:
             pass
 
-        #  Sincronización de PoseVirtual (z/yaw)
+        try:
+            if getattr(self, "_mission_pads_enabled", False):
+                # Intenta leer posición del pad
+                mid_x = None
+                mid_y = None
+                mid_z = None
+
+                if hasattr(self._tello, "get_mission_pad_distance_x"):
+                    try:
+                        mid_x = self._tello.get_mission_pad_distance_x()
+                        mid_y = self._tello.get_mission_pad_distance_y()
+                        mid_z = self._tello.get_mission_pad_distance_z()
+                    except Exception:
+                        pass
+
+                # Si tenemos datos válidos del pad, actualizar pose real
+                if mid_x is not None and mid_y is not None and mid_z is not None:
+                    if mid_x >= 0 and mid_y >= 0 and mid_z >= 0:  # valores válidos
+                        if hasattr(self, "pose") and self.pose is not None:
+                            self.pose.set_from_mission_pad(mid_x, mid_y, mid_z)
+                            # Saltamos la sincronización tradicional
+                            self.telemetry_ts = time.time()
+                            time.sleep(period_s)
+                            continue
+        except Exception:
+            pass
+
+
         try:
             # Si aún no existe pose, la creamos
             if not hasattr(self, "pose") or self.pose is None:
@@ -121,9 +146,7 @@ def _telemetry_loop(self, period_s: float):
                 except Exception:
                     pass
         except Exception:
-
             pass
-
 
         self.telemetry_ts = time.time()
 
@@ -131,7 +154,6 @@ def _telemetry_loop(self, period_s: float):
 
 
 def startTelemetry(self, freq_hz: int = 5):
-
     if freq_hz <= 0:
         freq_hz = 5
 
@@ -161,7 +183,6 @@ def startTelemetry(self, freq_hz: int = 5):
 
 
 def stopTelemetry(self):
-
     self._telemetry_stop = True
     th = getattr(self, "_telemetry_thread", None)
     if th and th.is_alive():

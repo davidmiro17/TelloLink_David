@@ -1,7 +1,8 @@
 import math
 from dataclasses import dataclass
 
-#Función para mantener siempre el ángulo entre 0 y 360 grados
+
+# Función para mantener siempre el ángulo entre 0 y 360 grados
 def _wrap_deg(deg: float) -> float:
     d = deg % 360.0
     return d if d >= 0 else d + 360.0
@@ -17,9 +18,9 @@ class PoseVirtual:
     # Referencia de yaw en el momento del despegue (para yaw relativo = 0) ---
     yaw0_deg: float = 0.0
 
-    #Métodos básicos
+    # Métodos básicos
     def reset(self) -> None:
-        #Reinicia la pose al origen (punto de despegue).
+        # Reinicia la pose al origen (punto de despegue).
         self.x_cm = 0.0
         self.y_cm = 0.0
         self.z_cm = 0.0
@@ -28,7 +29,7 @@ class PoseVirtual:
         self.yaw0_deg = 0.0
 
     def capture(self) -> dict:
-        #Devuelve la pose actual y se redondea a un decimal
+        # Devuelve la pose actual y se redondea a un decimal
         return {
             "x_cm": round(self.x_cm, 1),
             "y_cm": round(self.y_cm, 1),
@@ -36,7 +37,7 @@ class PoseVirtual:
             "yaw_deg": round(self.yaw_deg, 1),
         }
 
-    #Llama cuando completa el despegue para fijar la referencia  del vuelo
+    # Llama cuando completa el despegue para fijar la referencia  del vuelo
     # Deja X=Y=0 en el punto de despegue, Z=altura actual y yaw relativo = 0
     def set_takeoff_reference(self, height_cm: float | None = None,
                               yaw_deg: float | None = None) -> None:
@@ -90,12 +91,18 @@ class PoseVirtual:
         elif direction == "down":
             self.z_cm -= d
 
-    #Distancia entre una pose y otra
+    def set_from_mission_pad(self, x_cm, y_cm, z_cm):
+
+        self.x_cm = float(x_cm)
+        self.y_cm = float(y_cm)
+        self.z_cm = float(z_cm)
+
+    # Distancia entre una pose y otra
     def distance_to(self, other: "PoseVirtual") -> float:
         dx = self.x_cm - other.x_cm
         dy = self.y_cm - other.y_cm
         dz = self.z_cm - other.z_cm
-        return math.sqrt(dx*dx + dy*dy + dz*dz)
+        return math.sqrt(dx * dx + dy * dy + dz * dz)
 
     def set_takeoff_reference(self, yaw_abs_deg: float | None):
 
@@ -112,9 +119,6 @@ class PoseVirtual:
         zero = float(self.yaw0_deg or 0.0) % 360.0
         rel = (abs_norm - zero) % 360.0
         self.yaw_deg = rel
-
-
-
 
     def __repr__(self) -> str:
         return (f"PoseVirtual(x={self.x_cm:.1f}, y={self.y_cm:.1f}, "
@@ -154,4 +158,3 @@ class PoseVirtual:
         self.y_cm += dy_global
         self.z_cm += dz
         self.yaw_deg = (self.yaw_deg + dyaw) % 360.0
-
