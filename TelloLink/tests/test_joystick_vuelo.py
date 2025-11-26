@@ -34,7 +34,7 @@ def main():
     if not dron.connect():
         print("ERROR: No se pudo conectar al dron")
         return
-    print("✓ Dron conectado")
+    print(" Dron conectado")
     print()
 
     # Inicializar joystick
@@ -54,7 +54,7 @@ def main():
         print("ERROR: No se pudo conectar al joystick")
         dron.disconnect()
         return
-    print("✓ Joystick conectado")
+    print(" Joystick conectado")
     print()
 
     print("=" * 80)
@@ -79,7 +79,7 @@ def main():
                 print("=" * 80)
                 dron.takeOff()
                 flying = True
-                print("✓ En vuelo - Control manual activo")
+                print(" En vuelo - Control manual activo")
                 print(f"  (Presiona botón {BUTTON_LAND} para aterrizar)")
                 print()
 
@@ -90,7 +90,7 @@ def main():
                 print("=" * 80)
                 dron.Land()
                 flying = False
-                print("✓ Aterrizaje completado")
+                print(" Aterrizaje completado")
                 print(f"  (Presiona botón {BUTTON_TAKEOFF} para despegar de nuevo)")
                 print()
 
@@ -127,7 +127,7 @@ def main():
         if flying:
             print("Aterrizando dron...")
             dron.Land()
-            print("✓ Aterrizaje de emergencia completado")
+            print(" Aterrizaje de emergencia completado")
 
     finally:
         # Asegurar RC en 0
@@ -138,7 +138,7 @@ def main():
         print("\nDesconectando...")
         controller.disconnect()
         dron.disconnect()
-        print("✓ Todo desconectado")
+        print(" Todo desconectado")
         print()
         print("=" * 80)
         print("Vuelo finalizado")

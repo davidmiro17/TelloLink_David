@@ -425,7 +425,7 @@ class MiniRemoteApp:
                 return
             self._pause_keepalive()
             self.dron.Land(blocking=False)
-            self._hud_show("🛬 Aterrizando", 1.5)
+            self._hud_show(" Aterrizando", 1.5)
         except Exception as e:
             messagebox.showerror("Land", str(e))
         finally:
@@ -835,13 +835,13 @@ class MiniRemoteApp:
             if not controller.connect():
                 print("[joy] No se pudo conectar al joystick")
                 def _ui():
-                    self._joy_label_var.set("🎮 —")
+                    self._joy_label_var.set(" —")
                 self.root.after(0, _ui)
                 return
 
             joy_name = controller.joystick.get_name()
             def _ui_name():
-                self._joy_label_var.set(f"🎮 {joy_name}")
+                self._joy_label_var.set(f" {joy_name}")
             self.root.after(0, _ui_name)
 
             print(f"[Joystick] Conectado: {joy_name}")
