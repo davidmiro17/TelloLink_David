@@ -111,7 +111,7 @@ class PoseVirtual:
         import math
 
         # Velocidad máxima del Tello (aproximada)
-        MAX_SPEED_CM_S = 200  # cm/s (ajustable según tu dron)
+        MAX_SPEED_CM_S = 210  # cm/s
         MAX_YAW_DEG_S = 100  # grados/s
 
         # Convertir porcentajes a velocidades reales

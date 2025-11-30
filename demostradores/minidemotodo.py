@@ -96,7 +96,7 @@ class MiniRemoteApp:
         self.gf_max_x_var = tk.StringVar(value="0")
         self.gf_max_y_var = tk.StringVar(value="0")
         self.gf_zmin_var = tk.StringVar(value="0")
-        self.gf_zmax_var = tk.StringVar(value="120")
+        self.gf_zmax_var = tk.StringVar(value="200 ")
         self.gf_mode_var = tk.StringVar(value="soft")
 
         # Mapa
@@ -233,7 +233,7 @@ class MiniRemoteApp:
         tk.Button(conn, text="Desconectar", width=12, command=self.on_disconnect).grid(row=0, column=1, **pad)
         tk.Button(conn, text="Salir", width=12, command=self.on_exit, bg="#ff6961").grid(row=0, column=2, **pad)
 
-        # Vuelo + REC badge
+        # Vuelo
         flight = tk.Frame(self.root, bd=1, relief="groove")
         flight.pack(fill="x", **pad)
         tk.Button(flight, text="Despegar (Enter)", width=16, command=self.on_takeoff, bg="#90ee90").grid(row=0,
@@ -793,7 +793,7 @@ class MiniRemoteApp:
 
     def _start_writer(self, size_wh):
         self._rec_size = size_wh
-        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+        fourcc = cv2. VideoWriter_fourcc(*"mp4v")
         self._rec_writer = cv2.VideoWriter(self._rec_path, fourcc, self._rec_fps, self._rec_size)
 
     def _start_recording(self):
@@ -813,7 +813,7 @@ class MiniRemoteApp:
             self._rec_writer = None
             self._hud_show("Guardado", 1.5)
 
-    # ===================== JOYSTICK =====================
+    # JOYSTICK
     def _init_joystick(self):
         if self._joy_running:
             return
@@ -854,6 +854,7 @@ class MiniRemoteApp:
             while self._joy_running:
                 try:
                     vx, vy, vz, yaw = controller.read_axes()
+
 
                     # Capturar valores para el closure
                     _vx, _vy, _vz, _yaw = vx, vy, vz, yaw
