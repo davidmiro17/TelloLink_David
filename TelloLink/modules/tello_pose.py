@@ -105,28 +105,28 @@ class PoseVirtual:
                 f"z={self.z_cm:.1f}, yaw={self.yaw_deg:.1f})")
 
 
-#A partir de usar el joystick (modo rc), la pose se calcula de esta manera, a partir de las velocidades
+#A partir de usar el joystick (modo rc), la pose se calcula de esta manera, a partir de las velocidades del joystick.
     def update_from_rc(self, vx_pct, vy_pct, vz_pct, yaw_pct, dt_sec=0.1):
 
         import math
 
-        # Velocidad máxima del Tello (aproximada)
+        # Velocidad máxima del Tello en modo "slow" al usar el joystick. Es un valor que se encuentra en el SDK, el cual está en torno a 2-2.1 m/s
         MAX_SPEED_CM_S = 210  # cm/s
         MAX_YAW_DEG_S = 100  # grados/s
 
-        # Convertir porcentajes a velocidades reales
+        # Convertir porcentajes de la velocidad leída del joystick (-100 a 100) a velocidades reales
         vx_cm_s = (vx_pct / 100.0) * MAX_SPEED_CM_S
         vy_cm_s = (vy_pct / 100.0) * MAX_SPEED_CM_S
         vz_cm_s = (vz_pct / 100.0) * MAX_SPEED_CM_S
         yaw_deg_s = (yaw_pct / 100.0) * MAX_YAW_DEG_S
 
-        # Calcular desplazamiento en el tiempo dt
-        dx_local = vx_cm_s * dt_sec  # adelante/atrás en sistema local
-        dy_local = vy_cm_s * dt_sec  # izquierda/derecha en sistema local
-        dz = vz_cm_s * dt_sec  # arriba/abajo (absoluto)
+        # Calcular desplazamiento en el tiempo dt, calcula cuantos centímetros se mueve el dron en el intervalo dt_sec
+        dx_local = vx_cm_s * dt_sec  # adelante/atrás
+        dy_local = vy_cm_s * dt_sec  # izquierda/derecha
+        dz = vz_cm_s * dt_sec  # arriba/abajo
         dyaw = yaw_deg_s * dt_sec  # rotación
 
-        # Convertir movimiento local a coordenadas globales
+        # Convertir movimiento local relativo al dron a las coordenadas globales
         theta = math.radians(self.yaw_deg)
         cos_theta = math.cos(theta)
         sin_theta = math.sin(theta)
@@ -135,7 +135,7 @@ class PoseVirtual:
         dx_global = dx_local * cos_theta - dy_local * sin_theta
         dy_global = dx_local * sin_theta + dy_local * cos_theta
 
-        # Actualizar pose
+        # Actualizar la posición y la orientación sumando el desplazamiento que se calcula en cada dt
         self.x_cm += dx_global
         self.y_cm += dy_global
         self.z_cm += dz
