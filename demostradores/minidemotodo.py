@@ -50,8 +50,8 @@ MAP_BG_COLOR = "#fafafa"
 MAP_AXES_COLOR = "#cccccc"
 MAP_DRONE_COLOR = "#1f77b4"
 MAP_TARGET_COLOR = "#d62728"
-PX_PER_CM = 2.5
-GRID_STEP_CM = 20
+PX_PER_CM = 1
+GRID_STEP_CM = 50
 CENTER_MARK_COLOR = "#666"
 
 
@@ -538,7 +538,7 @@ class MiniRemoteApp:
         if not self._telemetry_running:
             return
         self._pull_telemetry()
-        self.root.after(200, self._schedule_telemetry_pull)
+        self.root.after(100, self._schedule_telemetry_pull)
 
     def _pull_telemetry(self):
         try:
@@ -623,6 +623,7 @@ class MiniRemoteApp:
                 setattr(self.dron, "_gf_limits", {"max_x": max_x, "max_y": max_y, "zmin": zmin, "zmax": zmax})
                 setattr(self.dron, "_gf_mode", mode)
             self._reapply_exclusions_to_backend()
+            self._incl_rect = None
             messagebox.showinfo("Geofence", f"Activado ({mode}).")
             if self._map_win and tk.Toplevel.winfo_exists(self._map_win):
                 self._redraw_map_static()
@@ -861,16 +862,18 @@ class MiniRemoteApp:
 
                     def _send():
                         if self.dron.state == "flying":
-                            try:
-                                self.dron.rc(int(_vx), int(_vy), int(_vz), int(_yaw))
-                                self._last_rc_sent = time.time()
+                            vx_gf, vy_gf, vz_gf, yaw_gf = _vx, _vy, _vz, _yaw
 
-                                # Dead Reckoning desde RC (no telemetría)
-                                # vy = forward/back, vx = left/right
-                                if hasattr(self.dron, "pose") and self.dron.pose:
-                                    self.dron.pose.update_from_rc(_vy, _vx, _vz, _yaw, dt_sec=0.05)
+                            try:
+                                vx_gf, vy_gf, vz_gf, yaw_gf = self.dron.aplicar_geofence_rc(_vx, _vy, _vz, _yaw)
+                                self.dron.rc(int(vx_gf), int(vy_gf), int(vz_gf), int(yaw_gf))
+                                self._last_rc_sent = time.time()
                             except Exception:
-                                pass
+                                self.dron.rc(int(_vx), int(_vy), int(_vz), int(_yaw))
+
+                            if hasattr(self.dron, "pose") and self.dron.pose:
+                                self.dron.pose.update_from_rc(vy_gf, vx_gf, vz_gf, yaw_gf, dt_sec=0.05)
+
                     self.root.after(0, _send)
 
                     takeoff_pressed = controller.get_button(2)

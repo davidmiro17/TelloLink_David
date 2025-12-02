@@ -397,3 +397,498 @@ def _handle_violation(self):
                 self._gf_landing_initiated = False  # Permitimos futuros aterrizajes
 
         threading.Thread(target=do_land, daemon=True).start()
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+#Nuevas funciones para  geofence usando el modo rc (joystick)
+
+
+
+#Función para convertir las velocidades del joystick relativas al dron a las velocidades en coordenadas del mundo
+#Ya que el dron necesitamos saber si forward ("adelante") es hacia X o Y dependiendo del yaw
+def joystick_a_mundo(vx_joy, vy_joy, yaw_deg):
+
+    yaw_rad = math.radians(yaw_deg)
+
+    vel_X_mundo = vy_joy * math.cos(yaw_rad) - vx_joy * math.sin(yaw_rad)
+    vel_Y_mundo = vy_joy * math.sin(yaw_rad) + vx_joy * math.cos(yaw_rad)
+
+    return vel_X_mundo, vel_Y_mundo
+
+
+
+#Función para calcular la distancia al "peligro" (límite) más cercano en la dirección del movimiento
+#Como busco que el dron se pueda acercar al "peligro" y que vaya siendo avisado de que está a punto de llegar a un límite, por eso se usa esta función
+def calcular_distancia_peligro(x_dron, y_dron, z_dron,
+                               vel_X_mundo, vel_Y_mundo, vel_Z,
+                               limites, centro,
+                               circulos_excl, poligonos_excl):
+
+
+    # Lista donde guardaremos todas las distancias a "peligros"
+
+    distancias = []
+
+
+    #Inclusión
+
+    # Aquí calculamos la distancia a los bordes del rectángulo
+    # Solo nos importa el borde hacia donde vamos
+
+    if limites:
+        # Extraemos el centro del geofence
+        cx, cy = centro
+
+
+        half_x = limites.get("max_x", 0) / 2
+        half_y = limites.get("max_y", 0) / 2
+
+
+        z_min = limites.get("zmin", 0)
+        z_max = limites.get("max_z", 200)
+
+
+
+        # Si vamos hacia +X (adelante en el mundo)
+        if vel_X_mundo > 0 and half_x > 0:
+            # El límite adelante está en: centro + mitad del ancho
+            limite_adelante= cx + half_x
+            # La distancia es: límite - donde estoy
+            dist = limite_adelante - x_dron
+            distancias.append(dist)
+
+        # Si vamos hacia -X (atras en el mundo)
+        elif vel_X_mundo < 0 and half_x > 0:
+            # El límite atras está en: centro - mitad del ancho
+            limite_atras = cx - half_x
+            # La distancia es: donde estoy - límite
+            dist = x_dron - limite_atras
+            distancias.append(dist)
+
+
+
+        if vel_Y_mundo > 0 and half_y > 0:
+            limite_derecha = cy + half_y
+            dist = limite_derecha - y_dron
+            distancias.append(dist)
+
+        elif vel_Y_mundo < 0 and half_y > 0:
+            limite_izquierda = cy - half_y
+            dist = y_dron - limite_izquierda
+            distancias.append(dist)
+
+
+
+        # Si subimos
+        if vel_Z > 0 and z_max > 0:
+            dist = z_max - z_dron
+            distancias.append(dist)
+
+        # Si bajamos
+        elif vel_Z < 0:
+            dist = z_dron - z_min
+            distancias.append(dist)
+
+
+    #Exclusión (círculos)
+
+    # Para cada círculo, calculamos si vamos hacia él
+    # y a qué distancia está su borde
+
+    for c in circulos_excl:
+
+        c_x = c["cx"]  # Centro X del círculo
+        c_y = c["cy"]  # Centro Y del círculo
+        radio = c["r"]  # Radio del círculo
+
+        # Vector que va desde el dron hacia el centro del círculo
+        # Si el círculo está a la derecha, dy será positivo
+        # Si el círculo está arriba, dx será positivo
+        dx = c_x - x_dron
+        dy = c_y - y_dron
+
+        #Producto escalar: nos dice si vamos hacia el círculo o no
+        # Si es positivo: vamos hacia el círculo
+        # Si es negativo o cero: vamos en otra dirección
+        producto = vel_X_mundo * dx + vel_Y_mundo * dy
+
+        if producto > 0:
+
+
+            # Distancia del dron al centro  del círculo (Pitágoras)
+            dist_al_centro = math.sqrt(dx * dx + dy * dy)
+
+            # Distancia al borde del círculo (perímetro)
+
+            dist_al_borde = dist_al_centro - radio
+
+            # Solo añadimos si es positiva
+            if dist_al_borde > 0:
+                distancias.append(dist_al_borde)
+
+
+    # Exclusión (polígonos)
+
+    for p in poligonos_excl:
+        # Extraemos la lista de puntos del polígono
+
+        poly = p["poly"]
+
+        # Vamos a buscar la distancia al segmento más cercano
+        dist_min_poly = float('inf')
+
+        # Recorremos cada lado del polígono
+        # El lado i va del punto i al punto i+1
+        for i in range(len(poly)):
+            # Punto inicial del lado
+            x1, y1 = poly[i]
+            # Punto final del lado (% len para cerrar el polígono)
+            x2, y2 = poly[(i + 1) % len(poly)]
+
+            # Calculamos distancia del dron a este segmento
+            dist_segmento = _distancia_punto_a_segmento(x_dron, y_dron, x1, y1, x2, y2)
+
+            # Nos quedamos con la menor
+            if dist_segmento < dist_min_poly:
+                dist_min_poly = dist_segmento
+
+        # Ahora verificamos si vamos hacia  el polígono
+        # Usamos el  (punto medio) del polígono como referencia rápida de donde está el polígono
+        centroide_x = sum(pt[0] for pt in poly) / len(poly)
+        centroide_y = sum(pt[1] for pt in poly) / len(poly)
+
+        # Vector del dron al centroide
+        dx = centroide_x - x_dron
+        dy = centroide_y - y_dron
+
+        # Producto escalar:
+        producto = vel_X_mundo * dx + vel_Y_mundo * dy
+
+        if producto > 0 and dist_min_poly < float('inf'):
+            # Sí vamos hacia él, añadimos la distancia
+            distancias.append(dist_min_poly)
+
+
+
+    # Devolvemos la distancia mínima, es decir el peligro más cercano
+
+    if distancias:
+
+        return max(0, min(distancias))
+    else:
+
+        return float('inf')
+
+#Función para calcular la distancia a un segmento
+def _distancia_punto_a_segmento(px, py, x1, y1, x2, y2):
+
+
+    # Vector del segmento (de punto 1 a punto 2)
+    dx = x2 - x1
+    dy = y2 - y1
+
+    # Longitud al cuadrado del segmento
+
+    len_sq = dx * dx + dy * dy
+
+    if len_sq == 0:
+        # Caso especial: el segmento es un punto (los dos extremos son iguales)
+        # La distancia es simplemente la distancia al punto
+        return math.sqrt((px - x1) ** 2 + (py - y1) ** 2)
+
+    # "t" es la proyección del punto sobre la línea del segmento
+    # t=0 significa que el punto más cercano es el extremo (x1,y1)
+    # t=1 significa que el punto más cercano es el extremo (x2,y2)
+    # t entre 0 y 1 significa que el punto más cercano está en medio del segmento
+    t = ((px - x1) * dx + (py - y1) * dy) / len_sq
+
+    # Limitamos t entre 0 y 1
+    t = max(0, min(1, t))
+
+    # Calculamos el punto más cercano en el segmento
+    cerca_x = x1 + t * dx
+    cerca_y = y1 + t * dy
+
+    # Distancia del punto original al punto más cercano (Pitágoras)
+    return math.sqrt((px - cerca_x) ** 2 + (py - cerca_y) ** 2)
+
+#Función para calcular el factor de atenuacion en la velocidad a medida que nos acercamos al peligro
+#La idea es que a medida que nos acercamos, cada vez nos cuesta mas, finalmente el dron no avanzará
+def calcular_factor_atenuacion(distancia, margen=30.0):
+
+
+    # Si estamos lejos del peligro (fuera del margen)
+    if distancia >= margen:
+        return 1.0  # Velocidad completa normal
+
+    # Si estamos en el límite o ya lo pasamos
+    if distancia <= 0:
+        return 0.0  # Parar completamente el dron
+
+    # Si estamos en la zona de transición
+    # Factor proporcional: más cerca = más frena el dron
+    factor = distancia / margen
+
+    return factor
+
+
+#Función para aplicar la atenuación
+def aplicar_atenuacion_completa(vel_X_mundo, vel_Y_mundo, vel_Z, factor, x_dron, y_dron, peligro_info):
+
+
+    vel_X_at = vel_X_mundo
+    vel_Y_at = vel_Y_mundo
+    vel_Z_at = vel_Z
+
+    tipo = peligro_info.get("tipo")
+
+    #Rectangulo
+    if tipo == "rectangulo":
+        direccion = peligro_info.get("direccion")
+
+        if direccion == "+X" and vel_X_mundo > 0:
+            vel_X_at = vel_X_mundo * factor
+        elif direccion == "-X" and vel_X_mundo < 0:
+            vel_X_at = vel_X_mundo * factor
+        elif direccion == "+Y" and vel_Y_mundo > 0:
+            vel_Y_at = vel_Y_mundo * factor
+        elif direccion == "-Y" and vel_Y_mundo < 0:
+            vel_Y_at = vel_Y_mundo * factor
+        elif direccion == "+Z" and vel_Z > 0:
+            vel_Z_at = vel_Z * factor
+        elif direccion == "-Z" and vel_Z < 0:
+            vel_Z_at = vel_Z * factor
+
+    #Círculo o polígono
+    elif tipo in ("circulo", "poligono"):
+
+        # Atenuamos la componente de velocidad que va hacia él "peligro"
+
+        cx, cy = peligro_info.get("centro", (0, 0))
+
+        # Vector del dron hacia el peligro
+        dx = cx - x_dron
+        dy = cy - y_dron
+
+        # Normalizamos (longitud = 1)
+        longitud = math.sqrt(dx * dx + dy * dy)
+        if longitud > 0:
+            dx_norm = dx / longitud
+            dy_norm = dy / longitud
+
+            # Componente de velocidad hacia el peligro
+            vel_hacia_peligro = vel_X_mundo * dx_norm + vel_Y_mundo * dy_norm
+
+            # Solo atenuamos si vamos hacia el peligro
+            if vel_hacia_peligro > 0:
+                # Calculamos cuánto hay que restar
+                reduccion = vel_hacia_peligro * (1 - factor)
+
+                # Restamos en la dirección del peligro
+                vel_X_at = vel_X_mundo - reduccion * dx_norm
+                vel_Y_at = vel_Y_mundo - reduccion * dy_norm
+
+    return vel_X_at, vel_Y_at, vel_Z_at
+
+
+
+#Función que transforma velocidades del mundo a velocidades relativas al dron
+def mundo_a_joystick(vel_X_mundo, vel_Y_mundo, yaw_deg):
+
+
+    # Convertimos el ángulo de grados a radianes
+
+    yaw_rad = math.radians(yaw_deg)
+
+    # Calculamos coseno y seno del yaw
+    cos_yaw = math.cos(yaw_rad)
+    sin_yaw = math.sin(yaw_rad)
+
+
+
+    vy_joy = vel_X_mundo * cos_yaw + vel_Y_mundo * sin_yaw
+    vx_joy = -vel_X_mundo * sin_yaw + vel_Y_mundo * cos_yaw
+
+    return vx_joy, vy_joy
+
+#Función principal que aplica el geofence a los comandos rc del joystick
+def aplicar_geofence_rc(self, vx_joy, vy_joy, vz, yaw_joy):
+
+
+    # Si el geofence no está activado, devolvemos los valores sin cambios
+    if not getattr(self, "_gf_enabled", False):
+        return vx_joy, vy_joy, vz, yaw_joy
+
+    # Obtenemos la posición y yaw del dron
+    pose = getattr(self, "pose", None)
+    if pose is None:
+        return vx_joy, vy_joy, vz, yaw_joy
+
+    x_dron = float(getattr(pose, "x_cm", 0.0) or 0.0)
+    y_dron = float(getattr(pose, "y_cm", 0.0) or 0.0)
+    z_dron = float(getattr(pose, "z_cm", 0.0) or 0.0)
+    yaw_deg = float(getattr(pose, "yaw_deg", 0.0) or 0.0)
+
+    # Obtenemos los límites y exclusiones
+    limites = getattr(self, "_gf_limits", None)
+    centro = getattr(self, "_gf_center", (0.0, 0.0))
+    circulos = getattr(self, "_gf_excl_circles", [])
+    poligonos = getattr(self, "_gf_excl_polys", [])
+    margen = getattr(self, "_gf_margen", 30.0)
+
+    #Transformarmos joystick a "mundo"
+    vel_X_mundo, vel_Y_mundo = joystick_a_mundo(vx_joy, vy_joy, yaw_deg)
+
+    #Calcular distancia al peligro más cercano
+    distancia = calcular_distancia_peligro(x_dron, y_dron, z_dron, vel_X_mundo, vel_Y_mundo, vz, limites, centro, circulos, poligonos)
+
+    #Calcular factor de atenuación
+    factor = calcular_factor_atenuacion(distancia, margen)
+
+    #Aplicar la atenuación
+    vel_X_at = vel_X_mundo * factor
+    vel_Y_at = vel_Y_mundo * factor
+    vz_at = vz * factor
+
+    #Transformamos  de vuelta a joystick
+    vx_nuevo, vy_nuevo = mundo_a_joystick(vel_X_at, vel_Y_at, yaw_deg)
+
+
+    return vx_nuevo, vy_nuevo, vz_at, yaw_joy
+
+
