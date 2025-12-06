@@ -92,11 +92,13 @@ class MiniRemoteApp:
         self.vy_var = tk.StringVar(value="Vy: —")
         self.vz_var = tk.StringVar(value="Vz: —")
 
-        # Geofence
-        self.gf_max_x_var = tk.StringVar(value="0")
-        self.gf_max_y_var = tk.StringVar(value="0")
+        # Geofence (coordenadas absolutas, no simétricas)
+        self.gf_x1_var = tk.StringVar(value="-100")
+        self.gf_y1_var = tk.StringVar(value="-100")
+        self.gf_x2_var = tk.StringVar(value="100")
+        self.gf_y2_var = tk.StringVar(value="100")
         self.gf_zmin_var = tk.StringVar(value="0")
-        self.gf_zmax_var = tk.StringVar(value="200 ")
+        self.gf_zmax_var = tk.StringVar(value="200")
         self.gf_mode_var = tk.StringVar(value="soft")
 
         # Mapa
@@ -115,8 +117,18 @@ class MiniRemoteApp:
         self._incl_zmax_var = None
         self._excl_circles = []
         self._excl_polys = []
-        self._excl_zmin_var = None
-        self._excl_zmax_var = None
+        self._draw_layer_var = None
+
+        # Sistema de capas
+        self._current_layer = 0
+        self._last_layer = 0
+        self._layer_label = None
+        self._layer1_min_var = None
+        self._layer1_max_var = None
+        self._layer2_min_var = None
+        self._layer2_max_var = None
+        self._layer3_min_var = None
+        self._layer3_max_var = None
 
         # FPV
         self.fpv_label = None
@@ -263,34 +275,27 @@ class MiniRemoteApp:
         fpv_controls = tk.Frame(fpv_frame, bg="black")
         fpv_controls.pack(fill="x", padx=4, pady=(0, 4))
 
-        tk.Button(fpv_controls, text="FPV", command=self.start_fpv, bg="#cde7cd", width=8).pack(side="left", padx=2)
-        tk.Button(fpv_controls, text="PAUSA", command=self.stop_fpv, width=4).pack(side="left", padx=2)
-        tk.Button(fpv_controls, text="FOTO", command=self.take_snapshot, width=4).pack(side="left", padx=2)
-        tk.Button(fpv_controls, text="GRABAR", command=self.toggle_recording, width=4).pack(side="left", padx=2)
+        tk.Button(fpv_controls, text="▶ FPV", command=self.start_fpv,
+                  bg="#28a745", fg="white", font=("Arial", 9, "bold"), bd=0,
+                  activebackground="#218838", padx=8).pack(side="left", padx=2)
+        tk.Button(fpv_controls, text="⏸", command=self.stop_fpv,
+                  bg="#6c757d", fg="white", font=("Arial", 12), bd=0, width=3,
+                  activebackground="#5a6268").pack(side="left", padx=2)
+        tk.Button(fpv_controls, text="📷", command=self.take_snapshot,
+                  bg="#17a2b8", fg="white", font=("Arial", 12), bd=0, width=3,
+                  activebackground="#138496").pack(side="left", padx=2)
+        tk.Button(fpv_controls, text="⏺", command=self.toggle_recording,
+                  bg="#dc3545", fg="white", font=("Arial", 12), bd=0, width=3,
+                  activebackground="#c82333").pack(side="left", padx=2)
 
         tk.Label(fpv_controls, textvariable=self._joy_label_var, fg="white", bg="black", font=("Arial", 8)).pack(
             side="right", padx=4)
 
-        # Geofence
+        # Mapa y Geofence (controles movidos dentro del mapa)
         gf = tk.Frame(self.root, bd=1, relief="groove")
         gf.pack(fill="x", **pad)
-        tk.Label(gf, text="Geofence:").grid(row=0, column=0, sticky="e")
-        tk.Label(gf, text="ancho X (cm)").grid(row=0, column=1, sticky="e")
-        tk.Entry(gf, textvariable=self.gf_max_x_var, width=6).grid(row=0, column=2)
-        tk.Label(gf, text="ancho Y (cm)").grid(row=0, column=3, sticky="e")
-        tk.Entry(gf, textvariable=self.gf_max_y_var, width=6).grid(row=0, column=4)
-        tk.Label(gf, text="Z min (cm)").grid(row=0, column=5, sticky="e")
-        tk.Entry(gf, textvariable=self.gf_zmin_var, width=6).grid(row=0, column=6)
-        tk.Label(gf, text="Z max (cm)").grid(row=0, column=7, sticky="e")
-        tk.Entry(gf, textvariable=self.gf_zmax_var, width=6).grid(row=0, column=8)
-        tk.Label(gf, text="Modo:").grid(row=0, column=9, sticky="e")
-        tk.Radiobutton(gf, text="Soft", variable=self.gf_mode_var, value="soft").grid(row=0, column=10)
-        tk.Radiobutton(gf, text="Hard", variable=self.gf_mode_var, value="hard").grid(row=0, column=11)
-        tk.Button(gf, text="Activar", command=self.on_gf_activate, bg="#cde7cd").grid(row=1, column=1, padx=4, pady=4,
-                                                                                      sticky="w")
-        tk.Button(gf, text="Desactivar", command=self.on_gf_disable).grid(row=1, column=2, padx=4, pady=4, sticky="w")
-        tk.Button(gf, text="Abrir mapa", command=self.open_map_window, bg="#87CEEB").grid(row=1, column=4, padx=8,
-                                                                                          pady=4, sticky="w")
+        tk.Button(gf, text="🗺 Abrir Mapa y Geofence", command=self.open_map_window,
+                  bg="#87CEEB", font=("Arial", 10, "bold"), padx=20, pady=5).pack(pady=6)
 
         # Nota compacta
         note = tk.Label(self.root, fg="#555", font=("Arial", 8),
@@ -604,27 +609,45 @@ class MiniRemoteApp:
     #GEOFENCE
     def on_gf_activate(self):
         try:
-            max_x = float(self.gf_max_x_var.get() or 0.0)
-            max_y = float(self.gf_max_y_var.get() or 0.0)
+            # Coordenadas absolutas (no simétricas)
+            x1 = float(self.gf_x1_var.get() or 0.0)
+            y1 = float(self.gf_y1_var.get() or 0.0)
+            x2 = float(self.gf_x2_var.get() or 0.0)
+            y2 = float(self.gf_y2_var.get() or 0.0)
             zmin = float(self.gf_zmin_var.get() or 0.0)
-            zmax = float(self.gf_zmax_var.get() or 120.0)
+            zmax = float(self.gf_zmax_var.get() or 200.0)
             mode = self.gf_mode_var.get()
-            if max_x <= 0 or max_y <= 0:
-                messagebox.showwarning("Geofence", "Define ancho X/Y > 0.")
+
+            # Asegurar que x1 < x2, y1 < y2
+            if x1 > x2:
+                x1, x2 = x2, x1
+            if y1 > y2:
+                y1, y2 = y2, y1
+
+            width_x = abs(x2 - x1)
+            width_y = abs(y2 - y1)
+
+            if width_x <= 0 or width_y <= 0:
+                messagebox.showwarning("Geofence", "Define una zona válida (dibuja o introduce coordenadas).")
                 return
-            pose = getattr(self.dron, "pose", None)
-            cx = float(getattr(pose, "x_cm", 0.0) or 0.0) if pose else 0.0
-            cy = float(getattr(pose, "y_cm", 0.0) or 0.0) if pose else 0.0
+
+            # Calcular centro para compatibilidad con backend
+            cx = (x1 + x2) / 2
+            cy = (y1 + y2) / 2
+
             if hasattr(self.dron, "set_geofence"):
-                self.dron.set_geofence(max_x_cm=max_x, max_y_cm=max_y, max_z_cm=zmax, z_min_cm=zmin, mode=mode)
+                self.dron.set_geofence(max_x_cm=width_x, max_y_cm=width_y, max_z_cm=zmax, z_min_cm=zmin, mode=mode)
             else:
                 setattr(self.dron, "_gf_enabled", True)
                 setattr(self.dron, "_gf_center", (cx, cy))
-                setattr(self.dron, "_gf_limits", {"max_x": max_x, "max_y": max_y, "zmin": zmin, "zmax": zmax})
+                setattr(self.dron, "_gf_limits", {"x1": x1, "y1": y1, "x2": x2, "y2": y2, "zmin": zmin, "zmax": zmax})
                 setattr(self.dron, "_gf_mode", mode)
+
+            # Guardar el rectángulo de inclusión para dibujarlo (coordenadas absolutas)
+            self._incl_rect = (x1, y1, x2, y2)
+
             self._reapply_exclusions_to_backend()
-            self._incl_rect = None
-            messagebox.showinfo("Geofence", f"Activado ({mode}).")
+            self._hud_show(f"Geofence {mode} activado", 1.5)
             if self._map_win and tk.Toplevel.winfo_exists(self._map_win):
                 self._redraw_map_static()
         except Exception as e:
@@ -632,13 +655,41 @@ class MiniRemoteApp:
 
     def on_gf_disable(self):
         try:
-            if hasattr(self.dron, "set_geofence"):
-                self.dron.set_geofence(enabled=False)
+            if hasattr(self.dron, "disable_geofence"):
+                self.dron.disable_geofence()
             else:
                 setattr(self.dron, "_gf_enabled", False)
-            messagebox.showinfo("Geofence", "Desactivado.")
+            self._hud_show("Geofence desactivado", 1.5)
+            if self._map_win and tk.Toplevel.winfo_exists(self._map_win):
+                self._redraw_map_static()
         except Exception as e:
             messagebox.showerror("Geofence", f"Error: {e}")
+
+    def _clear_geofence(self):
+        """Limpia la zona de geofence dibujada."""
+        # Limpiar variables
+        self.gf_x1_var.set("-100")
+        self.gf_y1_var.set("-100")
+        self.gf_x2_var.set("100")
+        self.gf_y2_var.set("100")
+        self._incl_rect = None
+
+        # Desactivar geofence
+        if hasattr(self.dron, "disable_geofence"):
+            self.dron.disable_geofence()
+        else:
+            setattr(self.dron, "_gf_enabled", False)
+            setattr(self.dron, "_gf_limits", {})
+
+        # Limpiar puntos temporales
+        if hasattr(self, '_gf_pts'):
+            self._gf_pts.clear()
+        if self.map_canvas:
+            self.map_canvas.delete("gf_temp")
+
+        self._hud_show("Geofence limpiado", 1.5)
+        if self._map_win and tk.Toplevel.winfo_exists(self._map_win):
+            self._redraw_map_static()
 
     def _restart_gf_monitor(self, force=False):
         try:
@@ -948,42 +999,335 @@ class MiniRemoteApp:
         )
         self.map_canvas.pack(side="left", padx=10, pady=10)
 
-        # Panel lateral
-        side_panel = tk.Frame(self._map_win, bd=1, relief="groove")
-        side_panel.pack(side="right", fill="y", padx=10, pady=10)
+        # Panel lateral con scroll
+        side_container = tk.Frame(self._map_win, bd=1, relief="groove")
+        side_container.pack(side="right", fill="y", padx=10, pady=10)
 
-        tk.Label(side_panel, text="Herramientas de Exclusión", font=("Arial", 10, "bold")).pack(pady=6)
+        # Canvas para scroll
+        side_canvas = tk.Canvas(side_container, width=220, highlightthickness=0)
+        scrollbar = tk.Scrollbar(side_container, orient="vertical", command=side_canvas.yview)
+        side_panel = tk.Frame(side_canvas)
 
+        # Configurar scroll
+        side_panel.bind("<Configure>", lambda e: side_canvas.configure(scrollregion=side_canvas.bbox("all")))
+        side_canvas.create_window((0, 0), window=side_panel, anchor="nw")
+        side_canvas.configure(yscrollcommand=scrollbar.set)
+
+        # Scroll con rueda del ratón
+        def _on_mousewheel(event):
+            side_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+        side_canvas.bind_all("<MouseWheel>", _on_mousewheel)
+
+        scrollbar.pack(side="right", fill="y")
+        side_canvas.pack(side="left", fill="both", expand=True)
+
+        # Colores del tema
+        BG_CARD = "#f8f9fa"
+        BG_HEADER = "#343a40"
+        FG_HEADER = "#ffffff"
+        ACCENT = "#007bff"
+        layer_colors = ["#28a745", "#fd7e14", "#007bff"]  # Verde, Naranja, Azul
+
+        # ═══════════════════════════════════════════════════════
+        # SECCIÓN: DIBUJAR OBSTÁCULOS
+        # ═══════════════════════════════════════════════════════
+        card1 = tk.Frame(side_panel, bg=BG_CARD, bd=1, relief="solid")
+        card1.pack(fill="x", padx=4, pady=4)
+
+        tk.Label(card1, text="  DIBUJAR OBSTÁCULOS", font=("Arial", 9, "bold"),
+                 bg=BG_HEADER, fg=FG_HEADER, anchor="w").pack(fill="x", ipady=4)
+
+        content1 = tk.Frame(card1, bg=BG_CARD)
+        content1.pack(fill="x", padx=8, pady=8)
+
+        # Tipo de dibujo
         self._tool_var = tk.StringVar(value="none")
-        tk.Radiobutton(side_panel, text="Ninguna", variable=self._tool_var, value="none").pack(anchor="w")
-        tk.Radiobutton(side_panel, text="Círculo", variable=self._tool_var, value="circle").pack(anchor="w")
-        tk.Radiobutton(side_panel, text="Polígono", variable=self._tool_var, value="polygon").pack(anchor="w")
+        tool_frame = tk.Frame(content1, bg=BG_CARD)
+        tool_frame.pack(fill="x", pady=2)
+        tk.Radiobutton(tool_frame, text="Nada", variable=self._tool_var, value="none",
+                       bg=BG_CARD, activebackground=BG_CARD).pack(side="left")
+        tk.Radiobutton(tool_frame, text="⭕", variable=self._tool_var, value="circle",
+                       bg=BG_CARD, activebackground=BG_CARD, font=("Arial", 12)).pack(side="left")
+        tk.Radiobutton(tool_frame, text="⬜", variable=self._tool_var, value="rectangle",
+                       bg=BG_CARD, activebackground=BG_CARD, font=("Arial", 12)).pack(side="left")
+        tk.Radiobutton(tool_frame, text="⬡", variable=self._tool_var, value="polygon",
+                       bg=BG_CARD, activebackground=BG_CARD, font=("Arial", 12)).pack(side="left")
 
-        tk.Label(side_panel, text="Radio círculo (cm):").pack(pady=(10, 0))
+        # Radio
+        radio_frame = tk.Frame(content1, bg=BG_CARD)
+        radio_frame.pack(fill="x", pady=4)
+        tk.Label(radio_frame, text="Radio:", bg=BG_CARD, font=("Arial", 8)).pack(side="left")
         self._circle_radius_var = tk.IntVar(value=30)
-        tk.Entry(side_panel, textvariable=self._circle_radius_var, width=8).pack()
+        tk.Entry(radio_frame, textvariable=self._circle_radius_var, width=5,
+                 justify="center").pack(side="left", padx=4)
+        tk.Label(radio_frame, text="cm", bg=BG_CARD, font=("Arial", 8)).pack(side="left")
 
-        tk.Button(side_panel, text="Cerrar polígono", command=self._close_polygon).pack(pady=6)
-        tk.Button(side_panel, text="Limpiar exclusiones", command=self._clear_exclusions).pack(pady=6)
+        # Selector de capa
+        self._draw_layer_var = tk.StringVar(value="1")
+        self._draw_layer_var.trace_add("write", self._on_draw_layer_change)
 
-        tk.Label(side_panel, text="--- Inclusión (Rect) ---", font=("Arial", 9, "bold")).pack(pady=(12, 4))
-        tk.Button(side_panel, text="Definir rectángulo (2 clics)", command=self._start_inclusion_rect).pack(pady=4)
-        tk.Button(side_panel, text="Sincronizar destino", command=self._sync_inclusion_to_gf).pack(pady=4)
+        tk.Label(content1, text="Capa:", bg=BG_CARD, font=("Arial", 8)).pack(anchor="w")
+        layer_btn_frame = tk.Frame(content1, bg=BG_CARD)
+        layer_btn_frame.pack(fill="x", pady=2)
 
-        tk.Label(side_panel, text="Z min (cm):").pack()
+        for val, color, txt in [("1", layer_colors[0], "C1"), ("2", layer_colors[1], "C2"),
+                                 ("3", layer_colors[2], "C3"), ("all", "#6c757d", "ALL")]:
+            tk.Radiobutton(layer_btn_frame, text=txt, variable=self._draw_layer_var, value=val,
+                           bg=color, fg="white", selectcolor=color, activebackground=color,
+                           indicatoron=0, width=4, font=("Arial", 8, "bold")).pack(side="left", padx=1)
+
+        # Botones de acción
+        btn_row = tk.Frame(content1, bg=BG_CARD)
+        btn_row.pack(fill="x", pady=(8, 0))
+        tk.Button(btn_row, text="✓ Cerrar ⬡", command=self._close_polygon,
+                  bg="#6c757d", fg="white", font=("Arial", 8), bd=0,
+                  activebackground="#5a6268").pack(side="left", fill="x", expand=True, padx=1)
+        tk.Button(btn_row, text="🗑 Limpiar", command=self._clear_exclusions,
+                  bg="#dc3545", fg="white", font=("Arial", 8), bd=0,
+                  activebackground="#c82333").pack(side="left", fill="x", expand=True, padx=1)
+
+        # Variables para inclusión (usadas en templates)
         self._incl_zmin_var = tk.IntVar(value=0)
-        tk.Entry(side_panel, textvariable=self._incl_zmin_var, width=8).pack()
-
-        tk.Label(side_panel, text="Z max (cm):").pack()
         self._incl_zmax_var = tk.IntVar(value=120)
-        tk.Entry(side_panel, textvariable=self._incl_zmax_var, width=8).pack()
 
-        tk.Label(side_panel, text="--- Plantillas ---", font=("Arial", 9, "bold")).pack(pady=(12, 4))
-        tk.Button(side_panel, text="Guardar plantilla", command=self._save_template).pack(pady=4)
-        tk.Button(side_panel, text="Cargar plantilla", command=self._load_template).pack(pady=4)
+        # ═══════════════════════════════════════════════════════
+        # SECCIÓN: GEOFENCE (zona de vuelo permitida)
+        # ═══════════════════════════════════════════════════════
+        card_gf = tk.Frame(side_panel, bg=BG_CARD, bd=1, relief="solid")
+        card_gf.pack(fill="x", padx=4, pady=4)
 
+        tk.Label(card_gf, text="  GEOFENCE (zona segura)", font=("Arial", 9, "bold"),
+                 bg=BG_HEADER, fg=FG_HEADER, anchor="w").pack(fill="x", ipady=4)
+
+        content_gf = tk.Frame(card_gf, bg=BG_CARD)
+        content_gf.pack(fill="x", padx=8, pady=8)
+
+        # Botón para dibujar en el mapa
+        tk.Button(content_gf, text="📍 Dibujar zona (2 clics)", command=self._start_geofence_rect,
+                  bg=ACCENT, fg="white", font=("Arial", 8), bd=0,
+                  activebackground="#0056b3").pack(fill="x", pady=(0, 6))
+
+        # Fila 1: X1, Y1 (esquina 1)
+        row1 = tk.Frame(content_gf, bg=BG_CARD)
+        row1.pack(fill="x", pady=1)
+        tk.Label(row1, text="Esquina 1:", bg=BG_CARD, font=("Arial", 8)).pack(side="left")
+        tk.Entry(row1, textvariable=self.gf_x1_var, width=5, justify="center").pack(side="left", padx=1)
+        tk.Entry(row1, textvariable=self.gf_y1_var, width=5, justify="center").pack(side="left", padx=1)
+
+        # Fila 2: X2, Y2 (esquina 2)
+        row2 = tk.Frame(content_gf, bg=BG_CARD)
+        row2.pack(fill="x", pady=1)
+        tk.Label(row2, text="Esquina 2:", bg=BG_CARD, font=("Arial", 8)).pack(side="left")
+        tk.Entry(row2, textvariable=self.gf_x2_var, width=5, justify="center").pack(side="left", padx=1)
+        tk.Entry(row2, textvariable=self.gf_y2_var, width=5, justify="center").pack(side="left", padx=1)
+
+        # Fila 3: Z min y Z max
+        row3 = tk.Frame(content_gf, bg=BG_CARD)
+        row3.pack(fill="x", pady=1)
+        tk.Label(row3, text="Altura Z:", bg=BG_CARD, font=("Arial", 8)).pack(side="left")
+        tk.Entry(row3, textvariable=self.gf_zmin_var, width=4, justify="center").pack(side="left", padx=1)
+        tk.Label(row3, text="-", bg=BG_CARD).pack(side="left")
+        tk.Entry(row3, textvariable=self.gf_zmax_var, width=4, justify="center").pack(side="left", padx=1)
+        tk.Label(row3, text="cm", bg=BG_CARD, font=("Arial", 8)).pack(side="left")
+
+        # Fila 4: Modo
+        row4 = tk.Frame(content_gf, bg=BG_CARD)
+        row4.pack(fill="x", pady=1)
+        tk.Label(row4, text="Modo:", bg=BG_CARD, font=("Arial", 8)).pack(side="left")
+        tk.Radiobutton(row4, text="Soft", variable=self.gf_mode_var, value="soft",
+                       bg=BG_CARD, activebackground=BG_CARD, font=("Arial", 8)).pack(side="left")
+        tk.Radiobutton(row4, text="Hard", variable=self.gf_mode_var, value="hard",
+                       bg=BG_CARD, activebackground=BG_CARD, font=("Arial", 8)).pack(side="left")
+
+        # Fila 5: Botones
+        row5 = tk.Frame(content_gf, bg=BG_CARD)
+        row5.pack(fill="x", pady=(6, 0))
+        tk.Button(row5, text="✓ Activar", command=self.on_gf_activate,
+                  bg="#28a745", fg="white", font=("Arial", 8), bd=0,
+                  activebackground="#218838").pack(side="left", fill="x", expand=True, padx=1)
+        tk.Button(row5, text="✗ Desactivar", command=self.on_gf_disable,
+                  bg="#6c757d", fg="white", font=("Arial", 8), bd=0,
+                  activebackground="#5a6268").pack(side="left", fill="x", expand=True, padx=1)
+        tk.Button(row5, text="🗑", command=self._clear_geofence,
+                  bg="#dc3545", fg="white", font=("Arial", 8), bd=0, width=3,
+                  activebackground="#c82333").pack(side="left", padx=1)
+
+        # ═══════════════════════════════════════════════════════
+        # SECCIÓN: CAPAS DE ALTITUD
+        # ═══════════════════════════════════════════════════════
+        card4 = tk.Frame(side_panel, bg=BG_CARD, bd=1, relief="solid")
+        card4.pack(fill="x", padx=4, pady=4)
+
+        tk.Label(card4, text="  CAPAS DE ALTITUD", font=("Arial", 9, "bold"),
+                 bg=BG_HEADER, fg=FG_HEADER, anchor="w").pack(fill="x", ipady=4)
+
+        layers_container = tk.Frame(card4, bg=BG_CARD)
+        layers_container.pack(fill="x", padx=6, pady=6)
+
+        # Obtener valores actuales de las capas
+        if hasattr(self.dron, "get_layers"):
+            layers = self.dron.get_layers()
+        else:
+            layers = [
+                {"z_min": 0, "z_max": 60},
+                {"z_min": 60, "z_max": 120},
+                {"z_min": 120, "z_max": 200},
+            ]
+
+        # Usar los mismos colores del tema (ya definidos arriba)
+
+        # Variables para los límites
+        self._layer1_max_var = tk.IntVar(value=int(layers[0]["z_max"]))
+        self._layer2_max_var = tk.IntVar(value=int(layers[1]["z_max"]))
+        self._layer3_max_var = tk.IntVar(value=int(layers[2]["z_max"]))
+
+        # Labels para mostrar los rangos dinámicamente
+        self._layer1_range_var = tk.StringVar(value=f"0 - {layers[0]['z_max']} cm")
+        self._layer2_range_var = tk.StringVar(value=f"{layers[0]['z_max']} - {layers[1]['z_max']} cm")
+        self._layer3_range_var = tk.StringVar(value=f"{layers[1]['z_max']} - {layers[2]['z_max']} cm")
+
+        # Margen mínimo entre capas
+        MIN_GAP = 20
+
+        def on_c1_change(*args):
+            c1 = self._layer1_max_var.get()
+            c2 = self._layer2_max_var.get()
+            # Si C1 >= C2, empujar C2 hacia arriba
+            if c1 >= c2 - MIN_GAP:
+                self._layer2_max_var.set(c1 + MIN_GAP)
+            update_ranges()
+
+        def on_c2_change(*args):
+            c1 = self._layer1_max_var.get()
+            c2 = self._layer2_max_var.get()
+            c3 = self._layer3_max_var.get()
+            # Si C2 <= C1, empujar C1 hacia abajo
+            if c2 <= c1 + MIN_GAP:
+                self._layer1_max_var.set(c2 - MIN_GAP)
+            # Si C2 >= C3, empujar C3 hacia arriba
+            if c2 >= c3 - MIN_GAP:
+                self._layer3_max_var.set(c2 + MIN_GAP)
+            update_ranges()
+
+        def on_c3_change(*args):
+            c2 = self._layer2_max_var.get()
+            c3 = self._layer3_max_var.get()
+            # Si C3 <= C2, empujar C2 hacia abajo
+            if c3 <= c2 + MIN_GAP:
+                self._layer2_max_var.set(c3 - MIN_GAP)
+            update_ranges()
+
+        def update_ranges():
+            c1 = self._layer1_max_var.get()
+            c2 = self._layer2_max_var.get()
+            c3 = self._layer3_max_var.get()
+            self._layer1_range_var.set(f"0 - {c1} cm")
+            self._layer2_range_var.set(f"{c1} - {c2} cm")
+            self._layer3_range_var.set(f"{c2} - {c3} cm")
+
+            # Actualizar también el indicador de la esquina
+            if self._layer_label and self._draw_layer_var:
+                layer = self._draw_layer_var.get()
+                if layer == "1":
+                    zmin, zmax = 0, c1
+                elif layer == "2":
+                    zmin, zmax = c1, c2
+                elif layer == "3":
+                    zmin, zmax = c2, c3
+                else:  # all
+                    zmin, zmax = 0, c3
+
+                if layer == "all":
+                    layer_text = "Todas las capas"
+                else:
+                    layer_text = f"Capa {layer}"
+
+                self._layer_label.config(text=f"{layer_text}\n({zmin}-{zmax} cm)")
+
+        # Capa 3 (arriba - azul) - techo
+        layer3_frame = tk.Frame(layers_container, bg=layer_colors[2], bd=0)
+        layer3_frame.pack(fill="x", padx=2, pady=1)
+        tk.Label(layer3_frame, text="C3", font=("Arial", 9, "bold"),
+                 bg=layer_colors[2], fg="white", width=3).pack(side="left", padx=2)
+        tk.Scale(layer3_frame, from_=100, to=300, orient="horizontal",
+                 variable=self._layer3_max_var, length=90, sliderlength=18,
+                 bg=layer_colors[2], fg="white", troughcolor=layer_colors[2],
+                 highlightthickness=0, font=("Arial", 7), bd=0,
+                 command=lambda v: on_c3_change()).pack(side="left", padx=2)
+        tk.Label(layer3_frame, textvariable=self._layer3_range_var, font=("Arial", 7),
+                 bg=layer_colors[2], fg="white", width=10).pack(side="right", padx=2)
+
+        # Capa 2 (medio - naranja)
+        layer2_frame = tk.Frame(layers_container, bg=layer_colors[1], bd=0)
+        layer2_frame.pack(fill="x", padx=2, pady=1)
+        tk.Label(layer2_frame, text="C2", font=("Arial", 9, "bold"),
+                 bg=layer_colors[1], fg="white", width=3).pack(side="left", padx=2)
+        tk.Scale(layer2_frame, from_=50, to=250, orient="horizontal",
+                 variable=self._layer2_max_var, length=90, sliderlength=18,
+                 bg=layer_colors[1], fg="white", troughcolor=layer_colors[1],
+                 highlightthickness=0, font=("Arial", 7), bd=0,
+                 command=lambda v: on_c2_change()).pack(side="left", padx=2)
+        tk.Label(layer2_frame, textvariable=self._layer2_range_var, font=("Arial", 7),
+                 bg=layer_colors[1], fg="white", width=10).pack(side="right", padx=2)
+
+        # Capa 1 (abajo - verde)
+        layer1_frame = tk.Frame(layers_container, bg=layer_colors[0], bd=0)
+        layer1_frame.pack(fill="x", padx=2, pady=1)
+        tk.Label(layer1_frame, text="C1", font=("Arial", 9, "bold"),
+                 bg=layer_colors[0], fg="white", width=3).pack(side="left", padx=2)
+        tk.Scale(layer1_frame, from_=20, to=150, orient="horizontal",
+                 variable=self._layer1_max_var, length=90, sliderlength=18,
+                 bg=layer_colors[0], fg="white", troughcolor=layer_colors[0],
+                 highlightthickness=0, font=("Arial", 7), bd=0,
+                 command=lambda v: on_c1_change()).pack(side="left", padx=2)
+        tk.Label(layer1_frame, textvariable=self._layer1_range_var, font=("Arial", 7),
+                 bg=layer_colors[0], fg="white", width=10).pack(side="right", padx=2)
+
+        # Suelo - estilo mejorado
+        suelo_frame = tk.Frame(layers_container, bg="#8B4513")
+        suelo_frame.pack(fill="x", padx=2, pady=(4, 2))
+        tk.Label(suelo_frame, text="═══ SUELO ═══", font=("Arial", 8, "bold"),
+                 bg="#8B4513", fg="#FFE4C4").pack(fill="x", ipady=2)
+
+        # Botón Aplicar con estilo del tema
+        tk.Button(layers_container, text="✓ Aplicar capas", command=self._apply_layers,
+                  bg="#28a745", fg="white", font=("Arial", 8, "bold"), bd=0,
+                  activebackground="#218838", cursor="hand2").pack(fill="x", padx=2, pady=(6, 4))
+
+        # ═══════════════════════════════════════════════════════
+        # SECCIÓN: PLANTILLAS (al final)
+        # ═══════════════════════════════════════════════════════
+        card_plantillas = tk.Frame(side_panel, bg=BG_CARD, bd=1, relief="solid")
+        card_plantillas.pack(fill="x", padx=4, pady=4)
+
+        tk.Label(card_plantillas, text="  PLANTILLAS", font=("Arial", 9, "bold"),
+                 bg=BG_HEADER, fg=FG_HEADER, anchor="w").pack(fill="x", ipady=4)
+
+        content_plantillas = tk.Frame(card_plantillas, bg=BG_CARD)
+        content_plantillas.pack(fill="x", padx=8, pady=8)
+
+        btn_frame_plantillas = tk.Frame(content_plantillas, bg=BG_CARD)
+        btn_frame_plantillas.pack(fill="x")
+        tk.Button(btn_frame_plantillas, text="💾 Guardar", command=self._save_template,
+                  bg="#28a745", fg="white", font=("Arial", 8), bd=0,
+                  activebackground="#218838").pack(side="left", fill="x", expand=True, padx=2)
+        tk.Button(btn_frame_plantillas, text="📂 Cargar", command=self._load_template,
+                  bg="#17a2b8", fg="white", font=("Arial", 8), bd=0,
+                  activebackground="#138496").pack(side="left", fill="x", expand=True, padx=2)
 
         self.map_canvas.bind("<Button-1>", self._on_map_click)
+
+        # Indicador de capa actual (esquina superior izquierda del canvas)
+        self._layer_label = tk.Label(
+            self._map_win,
+            text="Capa: --",
+            font=("Arial", 14, "bold"),
+            bg="#333333",
+            fg="#ffffff",
+            padx=10,
+            pady=5
+        )
+        self._layer_label.place(x=20, y=20)
 
         # Dibujar
         self._map_static_drawn = False
@@ -1013,27 +1357,56 @@ class MiniRemoteApp:
         enabled = bool(getattr(self.dron, "_gf_enabled", False))
         if enabled:
             lim = getattr(self.dron, "_gf_limits", {})
-            cx, cy = getattr(self.dron, "_gf_center", (0.0, 0.0))
-            max_x = float(lim.get("max_x", 0.0) or 0.0)
-            max_y = float(lim.get("max_y", 0.0) or 0.0)
-            if max_x > 0 and max_y > 0:
-                x1, y1 = self._world_to_canvas(cx - max_x / 2, cy - max_y / 2)
-                x2, y2 = self._world_to_canvas(cx + max_x / 2, cy + max_y / 2)
-                self.map_canvas.create_rectangle(x1, y1, x2, y2, outline="#00aa00", width=3, tags="inclusion")
+            # Usar coordenadas absolutas si existen
+            if "x1" in lim and "x2" in lim:
+                gf_x1 = float(lim.get("x1", 0.0))
+                gf_y1 = float(lim.get("y1", 0.0))
+                gf_x2 = float(lim.get("x2", 0.0))
+                gf_y2 = float(lim.get("y2", 0.0))
+                p1x, p1y = self._world_to_canvas(gf_x1, gf_y1)
+                p2x, p2y = self._world_to_canvas(gf_x2, gf_y2)
+                self.map_canvas.create_rectangle(p1x, p1y, p2x, p2y, outline="#00aa00", width=3, tags="inclusion")
 
         # Rectángulo de inclusión local (definido en mapa pero no activado aún)
         if self._incl_rect:
             self._draw_inclusion_rect(self._incl_rect)
+
+        # Obtener capa actual del dron para colorear exclusiones
+        current_layer = self._current_layer if self._current_layer > 0 else 1
+
+        # Colores para exclusiones
+        COLOR_IN_LAYER = "#ff0000"      # Rojo - obstáculo en capa actual
+        COLOR_OTHER_LAYER = "#ffcccc"   # Rojo claro - obstáculo en otra capa
+        WIDTH_IN_LAYER = 3
+        WIDTH_OTHER_LAYER = 1
 
         # Exclusiones (círculos)
         for c in self._excl_circles:
             cx_w, cy_w, r_w = c["cx"], c["cy"], c["r"]
             cx_px, cy_px = self._world_to_canvas(cx_w, cy_w)
             r_px = r_w * PX_PER_CM
+
+            # Determinar si está en la capa actual
+            excl_layers = self._get_exclusion_layers(c)
+            in_current_layer = current_layer in excl_layers
+
+            color = COLOR_IN_LAYER if in_current_layer else COLOR_OTHER_LAYER
+            width = WIDTH_IN_LAYER if in_current_layer else WIDTH_OTHER_LAYER
+
             self.map_canvas.create_oval(
                 cx_px - r_px, cy_px - r_px,
                 cx_px + r_px, cy_px + r_px,
-                outline="#ff0000", width=2, fill="", tags="exclusion"
+                outline=color, width=width, fill="", tags="exclusion"
+            )
+
+            # Mostrar en qué capas está (pequeño texto)
+            layers_text = ",".join(str(l) for l in excl_layers)
+            self.map_canvas.create_text(
+                cx_px, cy_px,
+                text=f"C{layers_text}",
+                font=("Arial", 8),
+                fill=color,
+                tags="exclusion"
             )
 
         # Exclusiones (polígonos)
@@ -1043,7 +1416,35 @@ class MiniRemoteApp:
                 canvas_pts = []
                 for (px, py) in pts:
                     canvas_pts.extend(self._world_to_canvas(px, py))
-                self.map_canvas.create_polygon(canvas_pts, outline="#ff0000", fill="", width=2, tags="exclusion")
+
+                # Determinar si está en la capa actual
+                excl_layers = self._get_exclusion_layers(p)
+                in_current_layer = current_layer in excl_layers
+
+                color = COLOR_IN_LAYER if in_current_layer else COLOR_OTHER_LAYER
+                width = WIDTH_IN_LAYER if in_current_layer else WIDTH_OTHER_LAYER
+
+                self.map_canvas.create_polygon(
+                    canvas_pts,
+                    outline=color, fill="", width=width, tags="exclusion"
+                )
+
+                # Mostrar en qué capas está (en el centroide)
+                centroid_x = sum(pt[0] for pt in pts) / len(pts)
+                centroid_y = sum(pt[1] for pt in pts) / len(pts)
+                cx_text, cy_text = self._world_to_canvas(centroid_x, centroid_y)
+                layers_text = ",".join(str(l) for l in excl_layers)
+                self.map_canvas.create_text(
+                    cx_text, cy_text,
+                    text=f"C{layers_text}",
+                    font=("Arial", 8),
+                    fill=color,
+                    tags="exclusion"
+                )
+
+        # Redibujar el dron para que no desaparezca
+        self._last_pose_key = None  # Forzar redibujado
+        self._update_map_drone()
 
     def _update_map_drone(self):
 
@@ -1066,10 +1467,14 @@ class MiniRemoteApp:
 
         x = getattr(pose, "x_cm", None)
         y = getattr(pose, "y_cm", None)
+        z = getattr(pose, "z_cm", None)
         yaw = getattr(pose, "yaw_deg", None)
 
         if x is None or y is None:
             return
+
+        # Actualizar indicador de capa
+        self._update_layer_indicator(z)
 
         key = (round(x, 1), round(y, 1), round(yaw, 1) if yaw else 0)
         if key == self._last_pose_key:
@@ -1088,6 +1493,7 @@ class MiniRemoteApp:
                 fill=MAP_DRONE_COLOR, outline="black", width=2, tags="drone"
             )
 
+            # Flecha de yaw (rotación) - roja corta
             if yaw is not None:
                 th = math.radians(yaw)
                 arrow_len = 20
@@ -1101,6 +1507,23 @@ class MiniRemoteApp:
                     cx_px + dx_canvas, cy_px + dy_canvas,
                     fill="red", width=2, arrow=tk.LAST, tags="drone"
                 )
+
+            # Flecha de velocidad (dirección de movimiento) - azul larga
+            vx = getattr(pose, "vx", None) or getattr(pose, "vel_x", None)
+            vy = getattr(pose, "vy", None) or getattr(pose, "vel_y", None)
+            if vx is not None and vy is not None:
+                speed = math.sqrt(vx**2 + vy**2)
+                if speed > 5:  # Solo mostrar si hay movimiento significativo
+                    # Normalizar y escalar la flecha
+                    arrow_len_vel = min(50, speed * 2)  # Escalar con velocidad
+                    dx_vel = (vx / speed) * arrow_len_vel * PX_PER_CM
+                    dy_vel = -(vy / speed) * arrow_len_vel * PX_PER_CM
+
+                    self.map_canvas.create_line(
+                        cx_px, cy_px,
+                        cx_px + dy_vel, cy_px + dx_vel,
+                        fill="black", width=3, arrow=tk.LAST, tags="drone"
+                    )
         except Exception as e:
             print(f"[DEBUG] Error dibujando dron: {e}")
             self.map_canvas = None
@@ -1116,16 +1539,78 @@ class MiniRemoteApp:
 
         if tool == "circle":
             self._add_exclusion_circle(wx, wy)
+        elif tool == "rectangle":
+            self._add_rectangle_point(wx, wy)
         elif tool == "polygon":
             self._add_polygon_point(wx, wy)
+        elif tool == "geofence_rect":
+            self._add_geofence_point(wx, wy)
         elif tool == "inclusion_rect":
             self._add_inclusion_point(wx, wy)
+
+    def _on_draw_layer_change(self, *args):
+        """Actualiza el indicador de capa cuando cambia la selección."""
+        if not self._draw_layer_var:
+            return
+
+        layer = self._draw_layer_var.get()
+        zmin, zmax = self._get_layer_z_range(layer)
+
+        # Actualizar el indicador grande de la esquina
+        if self._layer_label:
+            # Usar colores consistentes con el tema
+            colors = {
+                "1": "#28a745",  # Verde - capa 1
+                "2": "#fd7e14",  # Naranja - capa 2
+                "3": "#007bff",  # Azul - capa 3
+                "all": "#6c757d",  # Gris - todas
+            }
+            bg_color = colors.get(layer, "#333333")
+
+            if layer == "all":
+                layer_text = "Todas las capas"
+            else:
+                layer_text = f"Capa {layer}"
+
+            self._layer_label.config(
+                text=f"{layer_text}\n({zmin}-{zmax} cm)",
+                bg=bg_color
+            )
+
+            # Redibujar mapa para mostrar exclusiones de esa capa
+            self._current_layer = int(layer) if layer.isdigit() else 0
+            self._redraw_map_static()
+
+    def _get_layer_z_range(self, layer_str):
+        """Obtiene el rango Z para una capa seleccionada."""
+        # Obtener configuración de capas
+        if hasattr(self.dron, "get_layers"):
+            layers = self.dron.get_layers()
+        else:
+            layers = [
+                {"z_min": 0, "z_max": 60},
+                {"z_min": 60, "z_max": 120},
+                {"z_min": 120, "z_max": 200},
+            ]
+
+        if layer_str == "all":
+            return 0, int(layers[-1]["z_max"]) if layers else 200
+        elif layer_str == "1":
+            return int(layers[0]["z_min"]), int(layers[0]["z_max"])
+        elif layer_str == "2":
+            return int(layers[1]["z_min"]), int(layers[1]["z_max"])
+        elif layer_str == "3":
+            return int(layers[2]["z_min"]), int(layers[2]["z_max"])
+        else:
+            return 0, 200
 
     def _add_exclusion_circle(self, wx, wy):
 
         r = float(self._circle_radius_var.get() or 30.0)
-        zmin = self._incl_zmin_var.get()
-        zmax = self._incl_zmax_var.get()
+
+        # Obtener Z según la capa seleccionada
+        layer = self._draw_layer_var.get() if self._draw_layer_var else "all"
+        zmin, zmax = self._get_layer_z_range(layer)
 
         self._excl_circles.append({"cx": wx, "cy": wy, "r": r, "zmin": zmin, "zmax": zmax})
 
@@ -1144,6 +1629,51 @@ class MiniRemoteApp:
 
         self._redraw_map_static()
 
+    def _add_rectangle_point(self, wx, wy):
+        """Añade un punto para dibujar un rectángulo (2 clics: esquinas opuestas)."""
+        if not hasattr(self, '_rect_points'):
+            self._rect_points = []
+
+        self._rect_points.append((wx, wy))
+        cx_px, cy_px = self._world_to_canvas(wx, wy)
+
+        # Mostrar punto temporal
+        self.map_canvas.create_oval(
+            cx_px - 4, cy_px - 4, cx_px + 4, cy_px + 4,
+            fill="purple", outline="black", tags="rect_temp"
+        )
+
+        # Si tenemos 2 puntos, crear el rectángulo
+        if len(self._rect_points) == 2:
+            x1, y1 = self._rect_points[0]
+            x2, y2 = self._rect_points[1]
+
+            # Obtener Z según la capa seleccionada
+            layer = self._draw_layer_var.get() if self._draw_layer_var else "all"
+            zmin, zmax = self._get_layer_z_range(layer)
+
+            # Crear polígono rectangular (4 esquinas)
+            rect_poly = [(x1, y1), (x2, y1), (x2, y2), (x1, y2)]
+            self._excl_polys.append({"poly": rect_poly, "zmin": zmin, "zmax": zmax})
+
+            try:
+                if hasattr(self.dron, "add_exclusion_poly"):
+                    self.dron.add_exclusion_poly(
+                        points=rect_poly,
+                        z_min_cm=zmin, z_max_cm=zmax
+                    )
+                else:
+                    if not hasattr(self.dron, "_gf_excl_polys"):
+                        self.dron._gf_excl_polys = []
+                    self.dron._gf_excl_polys.append({"poly": rect_poly, "zmin": zmin, "zmax": zmax})
+            except Exception as e:
+                print(f"[WARN] No se pudo enviar rectángulo al backend: {e}")
+
+            # Limpiar puntos temporales
+            self._rect_points.clear()
+            self.map_canvas.delete("rect_temp")
+            self._redraw_map_static()
+
     def _add_polygon_point(self, wx, wy):
 
         self._poly_points.append((wx, wy))
@@ -1159,8 +1689,9 @@ class MiniRemoteApp:
             messagebox.showwarning("Polígono", "Necesitas al menos 3 puntos.")
             return
 
-        zmin = self._incl_zmin_var.get()
-        zmax = self._incl_zmax_var.get()
+        # Obtener Z según la capa seleccionada
+        layer = self._draw_layer_var.get() if self._draw_layer_var else "all"
+        zmin, zmax = self._get_layer_z_range(layer)
 
         self._excl_polys.append({"poly": list(self._poly_points), "zmin": zmin, "zmax": zmax})
 
@@ -1186,6 +1717,8 @@ class MiniRemoteApp:
         self._excl_circles.clear()
         self._excl_polys.clear()
         self._poly_points.clear()
+        if hasattr(self, '_rect_points'):
+            self._rect_points.clear()
 
         if hasattr(self.dron, "_gf_excl_circles"):
             self.dron._gf_excl_circles.clear()
@@ -1193,13 +1726,64 @@ class MiniRemoteApp:
             self.dron._gf_excl_polys.clear()
 
         self.map_canvas.delete("poly_temp")
+        self.map_canvas.delete("rect_temp")
         self._redraw_map_static()
+
+    def _start_geofence_rect(self):
+        """Inicia el dibujo de la zona de geofence en el mapa."""
+        if not hasattr(self, '_gf_pts'):
+            self._gf_pts = []
+        self._gf_pts.clear()
+        self._tool_var.set("geofence_rect")
+        self._hud_show("Clic en 2 esquinas del geofence", 3.0)
+
+    def _add_geofence_point(self, wx, wy):
+        """Añade un punto para definir el rectángulo de geofence."""
+        if not hasattr(self, '_gf_pts'):
+            self._gf_pts = []
+
+        self._gf_pts.append((wx, wy))
+        cx_px, cy_px = self._world_to_canvas(wx, wy)
+
+        # Mostrar punto temporal
+        self.map_canvas.create_oval(
+            cx_px - 5, cy_px - 5, cx_px + 5, cy_px + 5,
+            fill="#00aa00", outline="white", width=2, tags="gf_temp"
+        )
+
+        if len(self._gf_pts) == 2:
+            x1, y1 = self._gf_pts[0]
+            x2, y2 = self._gf_pts[1]
+
+            # Actualizar las variables de coordenadas
+            self.gf_x1_var.set(str(int(min(x1, x2))))
+            self.gf_y1_var.set(str(int(min(y1, y2))))
+            self.gf_x2_var.set(str(int(max(x1, x2))))
+            self.gf_y2_var.set(str(int(max(y1, y2))))
+
+            # Guardar para dibujar (coordenadas absolutas)
+            gf_x1 = min(x1, x2)
+            gf_y1 = min(y1, y2)
+            gf_x2 = max(x1, x2)
+            gf_y2 = max(y1, y2)
+            self._incl_rect = (gf_x1, gf_y1, gf_x2, gf_y2)
+
+            width_x = abs(x2 - x1)
+            width_y = abs(y2 - y1)
+
+            # Limpiar
+            self._gf_pts.clear()
+            self._tool_var.set("none")
+            self.map_canvas.delete("gf_temp")
+
+            self._hud_show(f"Zona definida: {width_x:.0f}x{width_y:.0f} cm", 2.0)
+            self._redraw_map_static()
 
     def _start_inclusion_rect(self):
 
         self._incl_pts.clear()
         self._tool_var.set("inclusion_rect")
-        messagebox.showinfo("Inclusión", "Haz clic en dos esquinas opuestas del rectángulo.")
+        self._hud_show("Clic en 2 esquinas", 2.0)
 
     def _add_inclusion_point(self, wx, wy):
 
@@ -1207,20 +1791,27 @@ class MiniRemoteApp:
         if len(self._incl_pts) == 2:
             x1, y1 = self._incl_pts[0]
             x2, y2 = self._incl_pts[1]
-            cx = (x1 + x2) / 2
-            cy = (y1 + y2) / 2
-            max_x = abs(x2 - x1)
-            max_y = abs(y2 - y1)
 
-            self._incl_rect = (cx, cy, max_x, max_y)
+            # Coordenadas absolutas ordenadas
+            gf_x1 = min(x1, x2)
+            gf_y1 = min(y1, y2)
+            gf_x2 = max(x1, x2)
+            gf_y2 = max(y1, y2)
+
+            # Actualizar variables de geofence
+            self.gf_x1_var.set(str(int(gf_x1)))
+            self.gf_y1_var.set(str(int(gf_y1)))
+            self.gf_x2_var.set(str(int(gf_x2)))
+            self.gf_y2_var.set(str(int(gf_y2)))
+
+            # Guardar con coordenadas absolutas
+            self._incl_rect = (gf_x1, gf_y1, gf_x2, gf_y2)
             self._incl_pts.clear()
             self._tool_var.set("none")
 
-            self.gf_max_x_var.set(str(int(max_x)))
-            self.gf_max_y_var.set(str(int(max_y)))
-
-            messagebox.showinfo("Inclusión",
-                                f"Rectángulo definido: centro ({cx:.1f}, {cy:.1f}), ancho X={max_x:.1f}, Y={max_y:.1f}.")
+            width_x = abs(x2 - x1)
+            width_y = abs(y2 - y1)
+            self._hud_show(f"Zona: {width_x:.0f}x{width_y:.0f} cm", 2.0)
             self._redraw_map_static()
 
     def _sync_inclusion_to_gf(self):
@@ -1229,29 +1820,33 @@ class MiniRemoteApp:
             messagebox.showwarning("Inclusión", "Define primero el rectángulo.")
             return
 
-        cx, cy, max_x, max_y = self._incl_rect
+        # Ahora _incl_rect es (x1, y1, x2, y2)
+        x1, y1, x2, y2 = self._incl_rect
         zmin = self._incl_zmin_var.get()
         zmax = self._incl_zmax_var.get()
         mode = self.gf_mode_var.get()
 
+        # Calcular centro y dimensiones para compatibilidad
+        cx = (x1 + x2) / 2
+        cy = (y1 + y2) / 2
+        width_x = abs(x2 - x1)
+        width_y = abs(y2 - y1)
+
         if hasattr(self.dron, "set_geofence"):
             self.dron.set_geofence(
-                enabled=True,
-                center=(cx, cy),
-                limits={"max_x": max_x, "max_y": max_y, "zmin": zmin, "zmax": zmax},
-                mode=mode
+                max_x_cm=width_x, max_y_cm=width_y,
+                max_z_cm=zmax, z_min_cm=zmin, mode=mode
             )
-        else:
-            setattr(self.dron, "_gf_enabled", True)
-            setattr(self.dron, "_gf_center", (cx, cy))
-            setattr(self.dron, "_gf_limits", {"max_x": max_x, "max_y": max_y, "zmin": zmin, "zmax": zmax})
-            setattr(self.dron, "_gf_mode", mode)
+        # Guardar coordenadas absolutas para el dibujo
+        setattr(self.dron, "_gf_enabled", True)
+        setattr(self.dron, "_gf_center", (cx, cy))
+        setattr(self.dron, "_gf_limits", {"x1": x1, "y1": y1, "x2": x2, "y2": y2, "zmin": zmin, "zmax": zmax})
+        setattr(self.dron, "_gf_mode", mode)
 
         self._restart_gf_monitor(force=True)
         self._reapply_exclusions_to_backend()
 
-        messagebox.showinfo("Geofence",
-                            f"Sincronizado: centro ({cx:.1f}, {cy:.1f}), X={max_x:.1f}, Y={max_y:.1f}, Z=[{zmin},{zmax}].")
+        self._hud_show(f"Geofence sincronizado", 1.5)
         self._redraw_map_static()
 
     def _save_template(self):
@@ -1265,7 +1860,13 @@ class MiniRemoteApp:
             "polygons": self._excl_polys,
             "inclusion": self._incl_rect,
             "zmin": self._incl_zmin_var.get(),
-            "zmax": self._incl_zmax_var.get()
+            "zmax": self._incl_zmax_var.get(),
+            # Configuración de capas
+            "layers": {
+                "c1_max": self._layer1_max_var.get(),
+                "c2_max": self._layer2_max_var.get(),
+                "c3_max": self._layer3_max_var.get()
+            }
         }
 
         try:
@@ -1276,7 +1877,7 @@ class MiniRemoteApp:
             messagebox.showerror("Plantilla", f"Error guardando: {e}")
 
     def _load_template(self):
-        """Carga exclusiones e inclusión desde un archivo JSON."""
+        """Carga exclusiones, inclusión y capas desde un archivo JSON."""
         path = filedialog.askopenfilename(filetypes=[("JSON", "*.json")])
         if not path:
             return
@@ -1295,6 +1896,15 @@ class MiniRemoteApp:
                 _, _, max_x, max_y = self._incl_rect
                 self.gf_max_x_var.set(str(int(max_x)))
                 self.gf_max_y_var.set(str(int(max_y)))
+
+            # Cargar configuración de capas
+            layers_config = data.get("layers", {})
+            if layers_config:
+                self._layer1_max_var.set(layers_config.get("c1_max", 60))
+                self._layer2_max_var.set(layers_config.get("c2_max", 120))
+                self._layer3_max_var.set(layers_config.get("c3_max", 200))
+                # Aplicar las capas al dron
+                self._apply_layers()
 
             self._reapply_exclusions_to_backend()
 
@@ -1323,15 +1933,148 @@ class MiniRemoteApp:
         if self.map_canvas is None or not rect_tuple:
             return
 
-        cx_cm, cy_cm, max_x, max_y = rect_tuple
-
-        x1, y1 = cx_cm - (max_x / 2), cy_cm - (max_y / 2)
-        x2, y2 = cx_cm + (max_x / 2), cy_cm + (max_y / 2)
+        # rect_tuple es (x1, y1, x2, y2) - coordenadas absolutas
+        x1, y1, x2, y2 = rect_tuple
 
         p1x, p1y = self._world_to_canvas(x1, y1)
         p2x, p2y = self._world_to_canvas(x2, y2)
 
-        self.map_canvas.create_rectangle(p1x, p1y, p2x, p2y, outline="#8a2be2", width=3, tags=("inclusion",))
+        self.map_canvas.create_rectangle(p1x, p1y, p2x, p2y, outline="#00aa00", width=3, tags=("inclusion",))
+
+    def _update_layer_indicator(self, z_cm):
+        """Actualiza el indicador de capa en el mapa."""
+        if not self._layer_label:
+            return
+
+        # Obtener capa actual usando el método del dron
+        if hasattr(self.dron, "get_current_layer"):
+            layer = self.dron.get_current_layer(z_cm)
+        else:
+            # Fallback: calcular localmente
+            layer = self._calculate_layer(z_cm)
+
+        if layer != self._current_layer:
+            self._last_layer = self._current_layer
+            self._current_layer = layer
+
+            # Cambiar color según la capa (colores consistentes con el tema)
+            colors = {
+                1: "#28a745",  # Verde - capa baja
+                2: "#fd7e14",  # Naranja - capa media
+                3: "#007bff",  # Azul - capa alta
+            }
+            bg_color = colors.get(layer, "#333333")
+
+            # Obtener rango de altura de la capa
+            if hasattr(self.dron, "get_layers"):
+                layers = self.dron.get_layers()
+                if 0 < layer <= len(layers):
+                    layer_info = layers[layer - 1]
+                    z_range = f"({layer_info['z_min']:.0f}-{layer_info['z_max']:.0f}cm)"
+                else:
+                    z_range = ""
+            else:
+                z_range = ""
+
+            # Actualizar label
+            z_str = f"{z_cm:.0f}" if z_cm is not None else "--"
+            self._layer_label.config(
+                text=f"Capa {layer} {z_range}\nAltura: {z_str} cm",
+                bg=bg_color
+            )
+
+            # Redibujar mapa para actualizar colores de obstáculos
+            if self._last_layer != 0:  # No redibujar la primera vez
+                self._redraw_map_static()
+
+                # Alerta en el HUD del FPV
+                direction = "Subiendo" if layer > self._last_layer else "Bajando"
+                self._hud_show(f"{direction} a Capa {layer}", 2.0)
+
+    def _calculate_layer(self, z_cm):
+        """Calcula la capa localmente (fallback si el dron no tiene el método)."""
+        if z_cm is None:
+            return 0
+
+        # Rangos por defecto
+        if z_cm <= 60:
+            return 1
+        elif z_cm <= 120:
+            return 2
+        else:
+            return 3
+
+    def _apply_layers(self):
+        """Aplica la configuración de capas al dron."""
+        try:
+            # Los sliders definen el techo de cada capa
+            # El suelo de cada capa es el techo de la anterior
+            c1_max = self._layer1_max_var.get()
+            c2_max = self._layer2_max_var.get()
+            c3_max = self._layer3_max_var.get()
+
+            # Validar orden lógico
+            if c1_max >= c2_max:
+                messagebox.showwarning("Capas", "C1 debe ser menor que C2")
+                return
+            if c2_max >= c3_max:
+                messagebox.showwarning("Capas", "C2 debe ser menor que C3")
+                return
+
+            layers = [
+                {"name": "Capa 1", "z_min": 0, "z_max": c1_max},
+                {"name": "Capa 2", "z_min": c1_max, "z_max": c2_max},
+                {"name": "Capa 3", "z_min": c2_max, "z_max": c3_max}
+            ]
+
+            # Aplicar al dron
+            if hasattr(self.dron, "set_layers"):
+                self.dron.set_layers(layers)
+                self._hud_show("Capas configuradas", 1.5)
+
+                # Forzar actualización del indicador
+                self._current_layer = 0
+                pose = getattr(self.dron, "pose", None)
+                if pose:
+                    z = getattr(pose, "z_cm", 0)
+                    self._update_layer_indicator(z)
+            else:
+                messagebox.showwarning("Capas", "El dron no soporta configuración de capas")
+
+        except Exception as e:
+            messagebox.showerror("Capas", f"Error: {e}")
+
+    def _get_exclusion_layers(self, exclusion):
+        """Determina qué capas ocupa una exclusión."""
+        # Intentar usar el método del dron
+        if hasattr(self.dron, "get_exclusion_layers"):
+            return self.dron.get_exclusion_layers(exclusion)
+
+        # Fallback: calcular localmente
+        excl_zmin = exclusion.get("zmin")
+        excl_zmax = exclusion.get("zmax")
+
+        # Si no tiene límites, ocupa todas las capas
+        if excl_zmin is None and excl_zmax is None:
+            return [1, 2, 3]
+
+        excl_zmin = float(excl_zmin) if excl_zmin is not None else 0.0
+        excl_zmax = float(excl_zmax) if excl_zmax is not None else 999.0
+
+        # Rangos por defecto de capas
+        layers_ranges = [
+            (0, 60),    # Capa 1
+            (60, 120),  # Capa 2
+            (120, 200)  # Capa 3
+        ]
+
+        result = []
+        for i, (layer_zmin, layer_zmax) in enumerate(layers_ranges):
+            # Hay solapamiento si los rangos se intersectan
+            if not (excl_zmax < layer_zmin or excl_zmin > layer_zmax):
+                result.append(i + 1)
+
+        return result if result else [1, 2, 3]
 
 
 #MAIN

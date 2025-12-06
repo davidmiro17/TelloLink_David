@@ -44,5 +44,4 @@ class TelloDron(object):
     from TelloLink.modules.tello_pose import PoseVirtual
     from TelloLink.modules.tello_goto import goto_rel, abort_goto
     from TelloLink.modules.tello_mission import run_mission, abort_mission
-    from TelloLink.modules.tello_geofence import set_geofence, disable_geofence, recenter_geofence, add_exclusion_poly, add_exclusion_circle, clear_exclusions, aplicar_geofence_rc
-
+    from TelloLink.modules.tello_geofence import set_geofence, disable_geofence, recenter_geofence, add_exclusion_poly, add_exclusion_circle, clear_exclusions, aplicar_geofence_rc, set_layers, get_layers, get_current_layer, get_exclusion_layers, get_exclusions_for_layer, check_layer_change
