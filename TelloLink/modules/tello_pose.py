@@ -1,3 +1,5 @@
+# tello_pose.py - Actualizado 2025-12-09
+# Añadidos atributos vx/vy/vz para flecha de velocidad
 import  math
 from dataclasses import dataclass
 
@@ -18,6 +20,11 @@ class PoseVirtual:
     # Referencia de yaw en el momento del despegue (para yaw relativo = 0) ---
     yaw0_deg: float = 0.0
 
+    # Velocidad actual en cm/s (para flecha de dirección de movimiento)
+    vx: float = 0.0
+    vy: float = 0.0
+    vz: float = 0.0
+
     # Métodos básicos
     def reset(self) -> None:
         # Reinicia la pose al origen (punto de despegue).
@@ -27,6 +34,10 @@ class PoseVirtual:
         self.yaw_deg = 0.0
         # También reseteamos la referencia
         self.yaw0_deg = 0.0
+        # Limpiar velocidades
+        self.vx = 0.0
+        self.vy = 0.0
+        self.vz = 0.0
 
     def capture(self) -> dict:
         # Devuelve la pose actual y se redondea a un decimal
@@ -52,6 +63,12 @@ class PoseVirtual:
         self.yaw_deg = _wrap_deg(self.yaw_deg + float(delta_deg))
 
     def update_move(self, direction: str, dist_cm: float) -> None:
+        """
+        Actualiza la pose tras un movimiento.
+        Sistema de coordenadas:
+        - yaw=0 → forward apunta a +X
+        - yaw=0 → right apunta a +Y
+        """
         d = float(dist_cm)
         yaw = math.radians(self.yaw_deg)  # usamos el yaw RELATIVO
 
@@ -107,7 +124,12 @@ class PoseVirtual:
 
 #A partir de usar el joystick (modo rc), la pose se calcula de esta manera, a partir de las velocidades del joystick.
     def update_from_rc(self, vx_pct, vy_pct, vz_pct, yaw_pct, dt_sec=0.1):
-
+        """
+        Actualiza la pose desde comandos RC (joystick).
+        Sistema de coordenadas:
+        - yaw=0 → forward apunta a +X
+        - yaw=0 → right apunta a +Y
+        """
         import math
 
         # Velocidad máxima del Tello en modo "slow" al usar el joystick. Es un valor que se encuentra en el SDK, el cual está en torno a 2-2.1 m/s
@@ -121,8 +143,8 @@ class PoseVirtual:
         yaw_deg_s = (yaw_pct / 100.0) * MAX_YAW_DEG_S
 
         # Calcular desplazamiento en el tiempo dt, calcula cuantos centímetros se mueve el dron en el intervalo dt_sec
-        dx_local = vx_cm_s * dt_sec  # adelante/atrás
-        dy_local = vy_cm_s * dt_sec  # izquierda/derecha
+        dx_local = vx_cm_s * dt_sec  # adelante/atrás (en referencia del dron)
+        dy_local = vy_cm_s * dt_sec  # izquierda/derecha (en referencia del dron)
         dz = vz_cm_s * dt_sec  # arriba/abajo
         dyaw = yaw_deg_s * dt_sec  # rotación
 
@@ -131,7 +153,7 @@ class PoseVirtual:
         cos_theta = math.cos(theta)
         sin_theta = math.sin(theta)
 
-        # Rotación del movimiento al sistema global. Transformamos "adelante/atrás/derecha/izquierda" del dron a "X/Y" del mapa
+        # Rotación del movimiento al sistema global (yaw=0 → forward=+X, right=+Y)
         dx_global = dx_local * cos_theta - dy_local * sin_theta
         dy_global = dx_local * sin_theta + dy_local * cos_theta
 

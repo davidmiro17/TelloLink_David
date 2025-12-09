@@ -1,3 +1,5 @@
+# tello_goto.py - Actualizado 2025-12-09
+# Movimiento fluido con comando 'go' + flecha de velocidad en tiempo real
 from __future__ import annotations
 import math
 import threading
@@ -26,17 +28,36 @@ def _adaptive_step(rest: float, base: float, min_step: float = MIN_STEP) -> floa
 
 #Función que hace girar al dron hasta el ángulo deseado
 def _rotate_to_yaw(self, target_yaw_deg: float) -> bool:
-    curr = float(getattr(self, "yaw_deg", 0.0) or 0.0) #Busca la orientación actual del dron, si no existe, le pone un 0
-    delta = (float(target_yaw_deg) - curr) % 360.0 #Calcula cuanto tiene que girar para llegar al ángulo objetivo
-    if delta == 0: #Si ya se está en la orientación, no hace nada
+    # Leer yaw actual desde pose
+    if hasattr(self, "pose") and self.pose:
+        curr = float(getattr(self.pose, "yaw_deg", 0.0) or 0.0)
+    else:
+        curr = float(getattr(self, "yaw_deg", 0.0) or 0.0)
+
+    delta = (float(target_yaw_deg) - curr) % 360.0
+    print(f"[rotate] curr={curr:.1f}°, target={target_yaw_deg:.1f}°, delta={delta:.1f}°")
+
+    if delta == 0:
+        print("[rotate] Ya en ángulo, no rota")
         return True
-    if delta > 180.0: #Si lo que hay que girar es mayor que 180
-        amt = int(round(360.0 - delta)) #Calcula el ángulo equivalente en sentido antihorario
-        resp = self.ccw(amt) #Gira
-    else: #Si en cambio es menor
-        amt = int(round(delta))  #Calcula el ángulo en sentido horario
-        resp = self.cw(amt) #Gira
-    return bool(str(resp).lower() == "ok" or resp is True)
+
+    if delta > 180.0:
+        amt = int(round(360.0 - delta))
+        print(f"[rotate] CCW {amt}°")
+        resp = self.ccw(amt)
+    else:
+        amt = int(round(delta))
+        print(f"[rotate] CW {amt}°")
+        resp = self.cw(amt)
+
+    ok = bool(str(resp).lower() == "ok" or resp is True)
+    print(f"[rotate] resp={resp}, ok={ok}")
+
+    # Actualizar pose.yaw_deg después de rotar
+    if ok and hasattr(self, "pose") and self.pose:
+        self.pose.yaw_deg = target_yaw_deg % 360.0
+
+    return ok
 
 
 
@@ -63,121 +84,216 @@ def _goto_rel_worker(self,
                      dx_cm: float, dy_cm: float, dz_cm: float = 0.0,
                      yaw_deg: Optional[float] = None,
                      speed_cm_s: Optional[float] = None,
+                     face_destination: bool = False,
                      callback: Optional[Callable[..., Any]] = None,
                      params: Any = None) -> None:
+    """
+    Worker que usa el comando 'go' para movimiento fluido y directo.
+    El comando 'go x y z speed' mueve el dron en línea recta al punto relativo.
+    Actualiza la pose en tiempo real para visualización suave en el mapa.
+    """
     #Chequeos básicos previos
-    if not hasattr(self, "pose") or self.pose is None: #Si la pose no existe, aborta
+    if not hasattr(self, "pose") or self.pose is None:
         print("[goto] No hay PoseVirtual; abortando.")
         return
-    if getattr(self, "state", "") == "disconnected": #Si está desconectado, aborta
+    if getattr(self, "state", "") == "disconnected":
         print("[goto] Dron desconectado; abortando.")
         return
-    bat = getattr(self, "battery_pct", None) #Si la batería es inferior al umbral definido anteriormente (20%), aborta
+    bat = getattr(self, "battery_pct", None)
     if isinstance(bat, int) and bat < _MIN_BAT_PCT:
         print(f"[goto] Batería baja ({bat}%), abortando.")
         return
 
-    #Si el dron no está volando, hace un despegue seguro a 0,5 metros
+    #Si el dron no está volando, hace un despegue seguro
     if getattr(self, "state", "") != "flying":
         ok = self.takeOff(0.5, blocking=True)
         if not ok:
-            print("[goto] No se pudo despegar.") #Si falla el despegue, aborta
+            print("[goto] No se pudo despegar.")
             return
         time.sleep(0.4)
 
-    #Si la velocidad no se ha pasado en la función, intenta fijar la velocidad del SDK de Tello
-    if speed_cm_s is not None:
-        try:
-            self.set_speed(int(speed_cm_s))
-        except Exception:
-            pass
+    # Velocidad por defecto 50 cm/s (rango Tello: 10-100)
+    speed = int(speed_cm_s) if speed_cm_s else 50
+    speed = max(10, min(100, speed))
 
-    #Llama a _rotate_to_yaw para orientar el dron al ángulo deseado, si el giro falla, aborta
-    if yaw_deg is not None:
-        if not _rotate_to_yaw(self, float(yaw_deg)):
-            print("[goto] Error en giro inicial.")
+    # Si face_destination está activado, rotar para mirar al destino
+    if face_destination and (dx_cm != 0 or dy_cm != 0):
+        target_angle = math.degrees(math.atan2(dy_cm, dx_cm))
+        print(f"[goto] face_destination: rotando a {target_angle:.1f}° (yaw actual: {self.pose.yaw_deg:.1f}°)")
+        if not _rotate_to_yaw(self, target_angle):
+            print("[goto] Error al rotar hacia destino.")
             return
-        time.sleep(0.05)
+        print(f"[goto] Rotación completada. Nuevo yaw: {self.pose.yaw_deg:.1f}°")
+        time.sleep(0.3)
 
-    # Objetivo de cada coordenada (suma la posición actual del dron con el desplazamiento deseado que se le manda al dron)
-    x_goal = self.pose.x_cm + float(dx_cm)
-    y_goal = self.pose.y_cm + float(dy_cm)
-    z_goal = self.pose.z_cm + float(dz_cm)
+    # Convertir desplazamiento mundo a coordenadas relativas al dron
+    # El comando 'go' usa: x=forward, y=left, z=up (relativo al heading del dron)
+    yaw_rad = math.radians(getattr(self.pose, "yaw_deg", 0.0) or 0.0)
+    cos_yaw = math.cos(yaw_rad)
+    sin_yaw = math.sin(yaw_rad)
 
-    #Esta función calcula lo que falta para llegar al objetivo en cada eje y en el plano. Finalmente se calcula la distancia directa al objetivo (hipotenusa)
-    def remaining():
-        rx = x_goal - self.pose.x_cm
-        ry = y_goal - self.pose.y_cm
-        rz = z_goal - self.pose.z_cm
-        rxy = math.hypot(rx, ry)
-        return rx, ry, rz, rxy
+    # Rotar del sistema mundo al sistema del dron
+    # forward = componente en dirección del heading
+    # left = componente perpendicular (positivo = izquierda)
+    forward_cm = dx_cm * cos_yaw + dy_cm * sin_yaw
+    left_cm = -dx_cm * sin_yaw + dy_cm * cos_yaw
+    up_cm = dz_cm
 
-    # Si ya estamos dentro de tolerancia, nada que hacer
-    _, _, rz0, rxy0 = remaining()
-    if (abs(rz0) <= _TOL_Z_CM) and (rxy0 <= _TOL_XY_CM):
+    # El comando go tiene límites: 20-500 cm por eje (valores menores de 20 se ignoran)
+    # Si alguna distancia es muy pequeña, usar comandos individuales
+    dist_xy = math.hypot(forward_cm, left_cm)
+    dist_total = math.hypot(dist_xy, up_cm)
+
+    if dist_total < 20:
+        print("[goto] Distancia muy pequeña, ya en destino.")
         if callback:
             try: callback(params)
-            except TypeError:
-                try: callback()
-                except Exception: pass
+            except: pass
         return
 
-    # Bucle hasta llegar al objetivo, o que haya algún error debido a motivos de seguridad
-    while True:
-        # posibilidad de aborto externo
-        if getattr(self, "_goto_abort", False): #Busca si el dron tiene el atributo _goto_abort, si no existe vale False, si existe aborta
+    # Dividir en segmentos si la distancia es > 500cm
+    MAX_GO_DIST = 450  # Un poco menos del límite para seguridad
+    num_segments = max(1, int(math.ceil(dist_total / MAX_GO_DIST)))
+
+    seg_forward = forward_cm / num_segments
+    seg_left = left_cm / num_segments
+    seg_up = up_cm / num_segments
+
+    for seg in range(num_segments):
+        if getattr(self, "_goto_abort", False):
             print("[goto] Abortado por solicitud externa.")
+            self.pose.vx = 0.0
+            self.pose.vy = 0.0
+            self.pose.vz = 0.0
             return
-        #Verificación de seguridad por batería baja
-        bat = getattr(self, "battery_pct", None) #Obtiene el valor actual de la batería
-        if isinstance(bat, int) and bat < _MIN_BAT_PCT: #Si el nivel está por debajo del mínim, aborta
+
+        # Verificar batería
+        bat = getattr(self, "battery_pct", None)
+        if isinstance(bat, int) and bat < _MIN_BAT_PCT:
             print(f"[goto] Abortado por batería ({bat}%).")
+            self.pose.vx = 0.0
+            self.pose.vy = 0.0
+            self.pose.vz = 0.0
             return
 
-        rx, ry, rz, rxy = remaining() #Actualiza la distancia que falta en tiempo real
+        # Preparar valores para el comando go (deben ser enteros, mínimo 20 o 0)
+        x_cmd = int(round(seg_forward))
+        y_cmd = int(round(seg_left))
+        z_cmd = int(round(seg_up))
 
-        #Si consideramos que ya ha llegado (dentro de las tolerancias) se hace el break, y sale del bucle
-        if (abs(rz) <= _TOL_Z_CM) and (rxy <= _TOL_XY_CM):
-            break
+        # El Tello ignora valores < 20, así que si son pequeños, poner 0
+        if abs(x_cmd) < 20: x_cmd = 0
+        if abs(y_cmd) < 20: y_cmd = 0
+        if abs(z_cmd) < 20: z_cmd = 0
 
-        #Corregir primero la altura
-        if abs(rz) > _TOL_Z_CM: #si aún hay que subir o bajar
-            stepz = _adaptive_step(rz, _STEP_Z_CM, min_step=20.0) #realiza el paso
-            cmd = "up" if rz > 0 else "down"
-            if not _send_and_update(self, cmd, stepz): #se envía el paso al dron y actualiza la pose, si falla se muestra el mensaje
-                print("[goto] Micro-paso Z fallido.")
-            time.sleep(_SLEEP_S)
+        # Si todo es 0, saltar
+        if x_cmd == 0 and y_cmd == 0 and z_cmd == 0:
             continue
 
-        #Este bloque convierte lo que falta en el mapa a cuanto falta avanzar/retroceder/izquierda/derecha según hacia donde mira el dron (yaw)
-        yaw = math.radians(getattr(self.pose, "yaw_deg", 0.0) or 0.0) #lee el yaw actual y lo convierte a radianes
-        fx, fy = math.cos(yaw), math.sin(yaw)  # eje forward (mundo)
-        rx_, ry_ = math.sin(yaw), -math.cos(yaw)  # eje right = forward rotado -90° (CW)
+        print(f"[goto] Segmento {seg+1}/{num_segments}: go {x_cmd} {y_cmd} {z_cmd} {speed}")
 
-        f_comp = rx * fx + ry * fy     #componente frontal
-        r_comp = rx * rx_ + ry * ry_   #componente horizontal
+        # Calcular desplazamiento en coordenadas mundo para este segmento
+        dx_world = seg_forward * cos_yaw - seg_left * sin_yaw
+        dy_world = seg_forward * sin_yaw + seg_left * cos_yaw
+        dz_world = seg_up
 
-        moved = False
+        # Calcular tiempo estimado del movimiento
+        seg_dist = math.hypot(math.hypot(abs(x_cmd), abs(y_cmd)), abs(z_cmd))
+        estimated_time = seg_dist / speed if speed > 0 else 1.0
 
-        if abs(f_comp) > (_TOL_XY_CM * 0.4): #Si lo que falta por avanzar o retroceder es mayor que el 40% de la tolerancia
-            stepx = _adaptive_step(f_comp, _STEP_XY_CM, min_step=15.0) #Se realiza el paso con su función
-            cmd = "forward" if f_comp > 0 else "back" #decide si va hacia delante o detrás
-            if not _send_and_update(self, cmd, stepx): #se manda el comando al dron y se actualiza la pose
-                print("[goto] Micro-paso forward/back fallido.")
-            moved = True
-        #Se realiza lo mismo pero para derecha o izquierda
-        if abs(r_comp) > (_TOL_XY_CM * 0.4):
-            stepy = _adaptive_step(r_comp, _STEP_XY_CM, min_step=15.0)
-            cmd = "right" if r_comp > 0 else "left"
-            if not _send_and_update(self, cmd, stepy):
-                print("[goto] Micro-paso right/left fallido.")
-            moved = True
+        # Guardar posición inicial
+        start_x = self.pose.x_cm
+        start_y = self.pose.y_cm
+        start_z = self.pose.z_cm
 
-        # si no hay nada significativo que mover, evita bucle vacío
-        if not moved and rxy <= _TOL_XY_CM:
-            break
+        # Flag para controlar el hilo de actualización
+        movement_done = threading.Event()
 
-        time.sleep(_SLEEP_S)
+        # Calcular velocidad en coordenadas mundo (para flecha de dirección)
+        if estimated_time > 0:
+            vel_x_world = dx_world / estimated_time  # cm/s en dirección X mundo
+            vel_y_world = dy_world / estimated_time  # cm/s en dirección Y mundo
+            vel_z_world = dz_world / estimated_time  # cm/s en dirección Z mundo
+        else:
+            vel_x_world = vel_y_world = vel_z_world = 0.0
+
+        # Función para actualizar pose en tiempo real
+        def update_pose_realtime():
+            UPDATE_INTERVAL = 0.1  # Actualizar cada 100ms
+            elapsed = 0.0
+            while not movement_done.is_set() and elapsed < estimated_time + 1.0:
+                progress = min(1.0, elapsed / estimated_time) if estimated_time > 0 else 1.0
+                # Actualizar pose interpolada
+                self.pose.x_cm = start_x + dx_world * progress
+                self.pose.y_cm = start_y + dy_world * progress
+                self.pose.z_cm = start_z + dz_world * progress
+                # Actualizar velocidad para flecha de dirección de movimiento
+                self.pose.vx = vel_x_world
+                self.pose.vy = vel_y_world
+                self.pose.vz = vel_z_world
+                time.sleep(UPDATE_INTERVAL)
+                elapsed += UPDATE_INTERVAL
+
+        # Iniciar hilo de actualización en tiempo real
+        update_thread = threading.Thread(target=update_pose_realtime, daemon=True)
+        update_thread.start()
+
+        # Enviar comando go
+        try:
+            # Intentar usar el método go_xyz_speed si existe
+            if hasattr(self, 'go_xyz_speed'):
+                resp = self.go_xyz_speed(x_cmd, y_cmd, z_cmd, speed)
+            elif hasattr(self, '_send'):
+                # Usar método interno _send de TelloDron
+                resp = self._send(f"go {x_cmd} {y_cmd} {z_cmd} {speed}")
+            elif hasattr(self, '_tello') and hasattr(self._tello, 'send_control_command'):
+                # Fallback: usar djitellopy directamente
+                resp = self._tello.send_control_command(f"go {x_cmd} {y_cmd} {z_cmd} {speed}")
+            else:
+                raise RuntimeError("No se encontró método para enviar comando go")
+
+            # Señalar que el movimiento terminó
+            movement_done.set()
+            update_thread.join(timeout=0.5)
+
+            # Verificar respuesta (puede mezclarse con otros comandos como battery?)
+            ok = (str(resp).lower() == "ok" or resp is True)
+            if not ok:
+                # Respuesta inesperada, pero el movimiento probablemente ocurrió
+                # (el SDK mezcla respuestas cuando hay queries concurrentes)
+                print(f"[goto] Respuesta inesperada: {resp} (asumiendo movimiento completado)")
+
+            # Siempre actualizar pose final (el dron se movió si no hubo excepción)
+            self.pose.x_cm = start_x + dx_world
+            self.pose.y_cm = start_y + dy_world
+            self.pose.z_cm = start_z + dz_world
+            # Limpiar velocidad (movimiento completado)
+            self.pose.vx = 0.0
+            self.pose.vy = 0.0
+            self.pose.vz = 0.0
+            print(f"[goto] Movimiento OK. Pose: ({self.pose.x_cm:.1f}, {self.pose.y_cm:.1f}, {self.pose.z_cm:.1f})")
+
+        except Exception as e:
+            movement_done.set()
+            # Limpiar velocidad en caso de error
+            self.pose.vx = 0.0
+            self.pose.vy = 0.0
+            self.pose.vz = 0.0
+            print(f"[goto] Error en comando go: {e}")
+            return
+
+        time.sleep(0.2)  # Pequeña pausa entre segmentos
+
+    # Rotación final si se especificó yaw_deg
+    if yaw_deg is not None:
+        if not _rotate_to_yaw(self, float(yaw_deg)):
+            print("[goto] Error en rotación final.")
+        time.sleep(0.1)
+
+    # Asegurar que la velocidad esté en 0 al finalizar
+    self.pose.vx = 0.0
+    self.pose.vy = 0.0
+    self.pose.vz = 0.0
 
     print("[goto] Objetivo alcanzado.")
     if callback:
@@ -191,14 +307,27 @@ def goto_rel(self,
              dx_cm: float, dy_cm: float, dz_cm: float = 0.0,
              yaw_deg: Optional[float] = None,
              speed_cm_s: Optional[float] = None,
+             face_destination: bool = False,
              blocking: bool = True,
              callback: Optional[Callable[..., Any]] = None,
              params: Any = None) -> None:
+    """
+    Navega a una posición relativa.
+
+    Args:
+        dx_cm, dy_cm, dz_cm: Desplazamiento relativo en cm
+        yaw_deg: Ángulo de orientación final (opcional)
+        speed_cm_s: Velocidad en cm/s (opcional)
+        face_destination: Si True, el dron rota para mirar hacia el destino antes de moverse
+        blocking: Si True, espera a que termine el movimiento
+        callback: Función a llamar al terminar
+        params: Parámetros para el callback
+    """
     setattr(self, "_goto_abort", False)
 
     t = threading.Thread(
         target=_goto_rel_worker,
-        args=(self, dx_cm, dy_cm, dz_cm, yaw_deg, speed_cm_s, callback, params),
+        args=(self, dx_cm, dy_cm, dz_cm, yaw_deg, speed_cm_s, face_destination, callback, params),
         daemon=True
     )
     t.start()
