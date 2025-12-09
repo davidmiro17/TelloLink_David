@@ -160,7 +160,7 @@ def startTelemetry(self, freq_hz: int = 5):
     self._last_pose_update_ts = time.time()
     self.telemetry_ts = time.time()
 
-    # Creamos aquí la pose
+    # Creamos aqui la pose
     if not hasattr(self, "pose") or self.pose is None:
         if PoseVirtual is not None:
             self.pose = PoseVirtual()

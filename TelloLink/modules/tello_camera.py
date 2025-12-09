@@ -49,7 +49,7 @@ def get_frame(self):
 
 
 def snapshot(self, path: str | None = None):  #Función para capturar imagen
-    frame = get_frame(self)  #Se intenta obtener la última imagen del Tello
+    frame = get_frame(self)  #Si intenta obtener la última imagen del Tello
     if frame is None:        #Si no hay imagen, espera y lo intenta de nuevo
         time.sleep(0.2)
         frame = get_frame(self)

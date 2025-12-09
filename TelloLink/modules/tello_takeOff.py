@@ -20,7 +20,7 @@ def _read_height_cm_runtime(self) -> int:
         return 0
 
 
-#Función para subir los centímetros restantes en el despegue
+#Funcion para subir los centímetros restantes en el despegue
 def _ascend_to_target(self, target_h_cm):
 
     try:

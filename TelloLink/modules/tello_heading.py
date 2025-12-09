@@ -34,7 +34,7 @@ def rotate(self, deg):
         if str(resp).lower() != "ok": #Si el tello no devuelve ok
             raise RuntimeError(f"{verb} {paso} -> {resp}") #Se lanza error y el mensaje de este
 
-        # >>> POSE: actualizar yaw si existe pose y el SDK aceptó el giro
+        # >> POSE: actualizar yaw si existe pose y el SDK aceptó el giro
         try:
             if hasattr(self, "pose") and self.pose is not None:
                 # deg>0 = cw; deg<0 = ccw. 'paso' es magnitud positiva.

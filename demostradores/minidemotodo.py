@@ -3924,7 +3924,7 @@ class MiniRemoteApp:
         threading.Thread(target=run_in_thread, daemon=True).start()
 
     def _abort_mission(self):
-        """Aborta la misión en ejecución."""
+        """Aborta la mision en ejecución."""
         if self._mission_running:
             self.dron.abort_mission()
             self._mission_running = False

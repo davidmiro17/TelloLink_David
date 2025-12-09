@@ -85,7 +85,7 @@ def _require_connected(self):
 def _send(self, cmd: str) -> str:
     _require_connected(self)
 
-    # djitellopy expone distintos nombres según la versión, con esto nos aseguramos de que funcione con versiones más antiguas
+    # djitelopy expone distintos nombres según la versión, con esto nos aseguramos de que funcione con versiones más antiguas
     if hasattr(self._tello, "send_read_command"):
         resp = self._tello.send_read_command(cmd)
         return str(resp)

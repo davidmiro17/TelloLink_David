@@ -92,7 +92,7 @@ def stop_video(self):
 
 
 
-#Variante de la función bloqueante
+#Variant de la función bloqueante
 def show_video_blocking(self, resize=None, window_name="Tello FPV"):
 
     _need_cv2()

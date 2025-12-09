@@ -1066,7 +1066,7 @@ def get_exclusions_for_layer(self, layer_num: int) -> Tuple[List[Dict], List[Dic
 
 def check_layer_change(self) -> Optional[int]:
     """
-    Verifica si el dron ha cambiado de capa.
+    Verifica  el dron ha cambiado de capa.
 
     Retorna:
         Número de la nueva capa si hubo cambio, None si no cambió.

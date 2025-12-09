@@ -1,5 +1,5 @@
 # tello_pose.py - Actualizado 2025-12-09
-# Añadidos atributos vx/vy/vz para flecha de velocidad
+# Añadido atributos vx/vy/vz para flecha de velocidad
 import  math
 from dataclasses import dataclass
 

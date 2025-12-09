@@ -500,7 +500,7 @@ def plan_mission_with_avoidance(waypoints: List[Dict[str, Any]],
                     '_intermediate': True
                 })
 
-    # Ruta de vuelta a casa
+    # Ruta de vuelta  casa
     if return_home and waypoints:
         last_wp = waypoints[-1]
         path_home = plan_path_around_obstacles(last_wp['x'], last_wp['y'], 0, 0, obstacles)
