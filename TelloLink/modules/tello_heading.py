@@ -3,6 +3,7 @@ import time
 MIN_DEG = 1
 STEP_MAX_DEG = 360      # El SDK solo acepta 1..360 por comando
 COOLDOWN_S = 0.4        #pequeña pausa entre comandos por seguridad
+ROTATION_SPEED_DEG_S = 90  # Velocidad aproximada de rotación del Tello (grados/segundo)
 
 
 def _magnitud_grados(deg):   #Esta función convierte cualquier ángulo en un ángulo positivo válido
@@ -31,17 +32,37 @@ def rotate(self, deg):
     while restante > 0: #Mientras quede algo por girar
         paso = restante if restante <= STEP_MAX_DEG else STEP_MAX_DEG #En la primera iteración, si hay que girar menos de 360 grados se gira lo que se haya pedido, si es superior, se gira 360 grados.
         resp = self._send(f"{verb} {paso}") #Se envía el comando al dron de los grados y el sentido horario de giro
-        if str(resp).lower() != "ok": #Si el tello no devuelve ok
-            raise RuntimeError(f"{verb} {paso} -> {resp}") #Se lanza error y el mensaje de este
+        resp_str = str(resp).lower().strip()
+
+        # Aceptar "ok" como éxito
+        waited_for_rotation = False
+        if resp_str == "ok":
+            pass  # OK, continuar
+        else:
+            # También aceptar respuestas numéricas (race condition con batería)
+            try:
+                int(resp)
+                # Es un número (probablemente batería) - la rotación puede seguir en progreso
+                # Esperar el tiempo estimado de rotación
+                estimated_time = paso / ROTATION_SPEED_DEG_S
+                wait_time = max(0.5, estimated_time + 0.3)  # +0.3s margen
+                print(f"[heading] Respuesta numérica ({resp}), esperando {wait_time:.1f}s para completar rotación de {paso}°...")
+                time.sleep(wait_time)
+                waited_for_rotation = True
+            except ValueError:
+                # Respuesta inesperada real
+                raise RuntimeError(f"{verb} {paso} -> {resp}")
 
         # >> POSE: actualizar yaw si existe pose y el SDK aceptó el giro
-        try:
-            if hasattr(self, "pose") and self.pose is not None:
-                # deg>0 = cw; deg<0 = ccw. 'paso' es magnitud positiva.
-                delta = float(paso) if verb == "cw" else -float(paso)
-                self.pose.update_yaw(delta)
-        except Exception:
-            pass
+        # Solo actualizar si no esperamos (si esperamos, la telemetría ya actualizó el yaw)
+        if not waited_for_rotation:
+            try:
+                if hasattr(self, "pose") and self.pose is not None:
+                    # deg>0 = cw; deg<0 = ccw. 'paso' es magnitud positiva.
+                    delta = float(paso) if verb == "cw" else -float(paso)
+                    self.pose.update_yaw(delta)
+            except Exception:
+                pass
         # <<< POSE
 
         restante = restante - paso #Lo que queda pendiente por girar se actualiza para volver al bucle, y girar finalmente

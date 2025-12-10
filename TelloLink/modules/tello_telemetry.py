@@ -90,17 +90,53 @@ def _telemetry_loop(self, period_s: float):
             pass
 
         # Velocidades (cm/s)
-
+        vx_local = 0
+        vy_local = 0
         try:
             vx = self._tello.get_speed_x()
             vy = self._tello.get_speed_y()
             vz = self._tello.get_speed_z()
             if vx is not None:
                 self.vx_cm_s = int(-vx)
+                vx_local = -vx
             if vy is not None:
                 self.vy_cm_s = int(-vy)
+                vy_local = -vy
             if vz is not None:
                 self.vz_cm_s = int(vz)
+        except Exception:
+            pass
+
+        # Integración de velocidad para actualizar pose x/y en tiempo real
+        try:
+            now = time.time()
+            dt = now - getattr(self, "_last_pose_update_ts", now)
+            self._last_pose_update_ts = now
+
+            # Solo integrar si estamos volando y hay velocidad significativa
+            if getattr(self, "state", "") == "flying" and hasattr(self, "pose") and self.pose is not None:
+                speed = (vx_local**2 + vy_local**2)**0.5
+                if speed > 5 and dt > 0 and dt < 1.0:  # Velocidad > 5 cm/s y dt razonable
+                    import math
+                    # vx_local es forward/back, vy_local es left/right (en frame del dron)
+                    # Convertir a coordenadas mundo usando yaw
+                    yaw_rad = math.radians(self.pose.yaw_deg)
+                    cos_y = math.cos(yaw_rad)
+                    sin_y = math.sin(yaw_rad)
+                    # dx_world = forward * cos(yaw) - right * sin(yaw)
+                    # dy_world = forward * sin(yaw) + right * cos(yaw)
+                    dx_world = vx_local * cos_y - vy_local * sin_y
+                    dy_world = vx_local * sin_y + vy_local * cos_y
+                    self.pose.x_cm += dx_world * dt
+                    self.pose.y_cm += dy_world * dt
+                    # Guardar velocidad en COORDENADAS MUNDO para flecha de movimiento
+                    self.pose.vx = dx_world  # velocidad en X mundo (cm/s)
+                    self.pose.vy = dy_world  # velocidad en Y mundo (cm/s)
+                else:
+                    # Sin movimiento significativo
+                    if hasattr(self.pose, 'vx'):
+                        self.pose.vx = 0
+                        self.pose.vy = 0
         except Exception:
             pass
 

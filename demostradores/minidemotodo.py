@@ -1285,6 +1285,8 @@ class MiniRemoteApp:
                        bg=BG_CARD, activebackground=BG_CARD, font=("Arial", 12)).pack(side="left")
         tk.Radiobutton(tool_frame, text="⬡", variable=self._tool_var, value="polygon",
                        bg=BG_CARD, activebackground=BG_CARD, font=("Arial", 12)).pack(side="left")
+        tk.Radiobutton(tool_frame, text="✋", variable=self._tool_var, value="select",
+                       bg=BG_CARD, activebackground=BG_CARD, font=("Arial", 12)).pack(side="left")
 
         # Radio
         radio_frame = tk.Frame(content1, bg=BG_CARD)
@@ -1322,6 +1324,54 @@ class MiniRemoteApp:
         # Variables para inclusión (usadas en templates)
         self._incl_zmin_var = tk.IntVar(value=0)
         self._incl_zmax_var = tk.IntVar(value=120)
+
+        # ═══════════════════════════════════════════════════════
+        # SECCIÓN: EDITAR OBSTÁCULO SELECCIONADO
+        # ═══════════════════════════════════════════════════════
+        card_obs_edit = tk.Frame(side_panel, bg=BG_CARD, bd=1, relief="solid")
+        card_obs_edit.pack(fill="x", padx=4, pady=4)
+
+        tk.Label(card_obs_edit, text="  EDITAR OBSTÁCULO", font=("Arial", 9, "bold"),
+                 bg=BG_HEADER, fg=FG_HEADER, anchor="w").pack(fill="x", ipady=4)
+
+        obs_edit_content = tk.Frame(card_obs_edit, bg=BG_CARD)
+        obs_edit_content.pack(fill="x", padx=8, pady=8)
+
+        # Botón para activar modo selección
+        tk.Button(obs_edit_content, text="✋ Seleccionar obstáculo", command=self._map_start_select_obs,
+                  bg=ACCENT, fg="white", font=("Arial", 8), bd=0,
+                  activebackground="#0056b3").pack(fill="x", pady=(0, 6))
+
+        self._map_obs_edit_label = tk.Label(obs_edit_content, text="Clic en ✋ y luego en obstáculo",
+                                             bg=BG_CARD, font=("Arial", 8, "italic"), fg="#666")
+        self._map_obs_edit_label.pack(anchor="w")
+
+        # Campos de edición (para círculo: cx, cy, r)
+        obs_edit_row1 = tk.Frame(obs_edit_content, bg=BG_CARD)
+        obs_edit_row1.pack(fill="x", pady=(4, 2))
+        tk.Label(obs_edit_row1, text="X:", bg=BG_CARD, font=("Arial", 8)).pack(side="left")
+        self._map_obs_edit_x = tk.Entry(obs_edit_row1, width=5)
+        self._map_obs_edit_x.pack(side="left", padx=(2, 8))
+        tk.Label(obs_edit_row1, text="Y:", bg=BG_CARD, font=("Arial", 8)).pack(side="left")
+        self._map_obs_edit_y = tk.Entry(obs_edit_row1, width=5)
+        self._map_obs_edit_y.pack(side="left", padx=(2, 8))
+
+        obs_edit_row2 = tk.Frame(obs_edit_content, bg=BG_CARD)
+        obs_edit_row2.pack(fill="x", pady=2)
+        tk.Label(obs_edit_row2, text="Radio/Tamaño:", bg=BG_CARD, font=("Arial", 8)).pack(side="left")
+        self._map_obs_edit_size = tk.Entry(obs_edit_row2, width=5)
+        self._map_obs_edit_size.pack(side="left", padx=(2, 8))
+
+        obs_edit_btns = tk.Frame(obs_edit_content, bg=BG_CARD)
+        obs_edit_btns.pack(fill="x", pady=(4, 0))
+        tk.Button(obs_edit_btns, text="✓ Aplicar", command=self._map_apply_obs_edit,
+                  bg="#28a745", fg="white", font=("Arial", 8, "bold"), bd=0, padx=8).pack(side="left", padx=2)
+        tk.Button(obs_edit_btns, text="🗑 Eliminar", command=self._map_delete_selected_obs,
+                  bg="#dc3545", fg="white", font=("Arial", 8, "bold"), bd=0, padx=8).pack(side="left", padx=2)
+
+        # Variable para obstáculo seleccionado en mapa
+        self._map_selected_obs_idx = None
+        self._map_selected_obs_type = None  # 'circle', 'poly' o 'rect'
 
         # ═══════════════════════════════════════════════════════
         # SECCIÓN: GEOFENCE (zona de vuelo permitida)
@@ -1614,7 +1664,7 @@ class MiniRemoteApp:
         WIDTH_OTHER_LAYER = 1
 
         # Exclusiones (círculos)
-        for c in self._excl_circles:
+        for i, c in enumerate(self._excl_circles):
             cx_w, cy_w, r_w = c["cx"], c["cy"], c["r"]
             cx_px, cy_px = self._world_to_canvas(cx_w, cy_w)
             r_px = r_w * PX_PER_CM
@@ -1623,8 +1673,16 @@ class MiniRemoteApp:
             excl_layers = self._get_exclusion_layers(c)
             in_current_layer = current_layer in excl_layers
 
-            color = COLOR_IN_LAYER if in_current_layer else COLOR_OTHER_LAYER
-            width = WIDTH_IN_LAYER if in_current_layer else WIDTH_OTHER_LAYER
+            # Verificar si está seleccionado
+            is_selected = (getattr(self, '_map_selected_obs_idx', None) == i and
+                          getattr(self, '_map_selected_obs_type', None) == 'circle')
+
+            if is_selected:
+                color = "#00ff00"  # Verde para seleccionado
+                width = 4
+            else:
+                color = COLOR_IN_LAYER if in_current_layer else COLOR_OTHER_LAYER
+                width = WIDTH_IN_LAYER if in_current_layer else WIDTH_OTHER_LAYER
 
             self.map_canvas.create_oval(
                 cx_px - r_px, cy_px - r_px,
@@ -1643,7 +1701,7 @@ class MiniRemoteApp:
             )
 
         # Exclusiones (polígonos)
-        for p in self._excl_polys:
+        for i, p in enumerate(self._excl_polys):
             pts = p["poly"]
             if len(pts) >= 3:
                 canvas_pts = []
@@ -1654,8 +1712,16 @@ class MiniRemoteApp:
                 excl_layers = self._get_exclusion_layers(p)
                 in_current_layer = current_layer in excl_layers
 
-                color = COLOR_IN_LAYER if in_current_layer else COLOR_OTHER_LAYER
-                width = WIDTH_IN_LAYER if in_current_layer else WIDTH_OTHER_LAYER
+                # Verificar si está seleccionado
+                is_selected = (getattr(self, '_map_selected_obs_idx', None) == i and
+                              getattr(self, '_map_selected_obs_type', None) == 'poly')
+
+                if is_selected:
+                    color = "#00ff00"  # Verde para seleccionado
+                    width = 4
+                else:
+                    color = COLOR_IN_LAYER if in_current_layer else COLOR_OTHER_LAYER
+                    width = WIDTH_IN_LAYER if in_current_layer else WIDTH_OTHER_LAYER
 
                 self.map_canvas.create_polygon(
                     canvas_pts,
@@ -1783,6 +1849,8 @@ class MiniRemoteApp:
             self._add_geofence_point(wx, wy)
         elif tool == "inclusion_rect":
             self._add_inclusion_point(wx, wy)
+        elif tool == "select":
+            self._map_select_obstacle_at(wx, wy)
 
     def _on_draw_layer_change(self, *args):
         """Actualiza el indicador de capa cuando cambia la selección."""
@@ -1952,6 +2020,16 @@ class MiniRemoteApp:
 
         self._excl_circles.clear()
         self._excl_polys.clear()
+
+        # Limpiar selección de obstáculo
+        self._map_selected_obs_idx = None
+        self._map_selected_obs_type = None
+        if hasattr(self, '_map_obs_edit_label'):
+            self._map_obs_edit_label.configure(text="Clic en ✋ y luego en obstáculo")
+        if hasattr(self, '_map_obs_edit_x'):
+            self._map_obs_edit_x.delete(0, tk.END)
+            self._map_obs_edit_y.delete(0, tk.END)
+            self._map_obs_edit_size.delete(0, tk.END)
         self._poly_points.clear()
         if hasattr(self, '_rect_points'):
             self._rect_points.clear()
@@ -1963,6 +2041,151 @@ class MiniRemoteApp:
 
         self.map_canvas.delete("poly_temp")
         self.map_canvas.delete("rect_temp")
+        self._redraw_map_static()
+
+    def _map_start_select_obs(self):
+        """Activa el modo de selección de obstáculos en el mapa."""
+        self._tool_var.set("select")
+        self._hud_show("Clic en un obstáculo para seleccionarlo", 3.0)
+
+    def _map_select_obstacle_at(self, wx, wy):
+        """Busca y selecciona un obstáculo en las coordenadas dadas."""
+        import math
+
+        # Buscar en círculos
+        for i, c in enumerate(self._excl_circles):
+            cx, cy, r = c.get("cx", 0), c.get("cy", 0), c.get("r", 30)
+            dist = math.sqrt((wx - cx)**2 + (wy - cy)**2)
+            if dist <= r:
+                self._map_selected_obs_idx = i
+                self._map_selected_obs_type = 'circle'
+                self._map_fill_obs_edit_fields(c, 'circle')
+                self._redraw_map_static()
+                return
+
+        # Buscar en polígonos
+        for i, p in enumerate(self._excl_polys):
+            pts = p.get("poly", [])
+            if pts and self._point_in_polygon(wx, wy, pts):
+                self._map_selected_obs_idx = i
+                self._map_selected_obs_type = 'poly'
+                self._map_fill_obs_edit_fields(p, 'poly')
+                self._redraw_map_static()
+                return
+
+        # No se encontró nada
+        self._map_selected_obs_idx = None
+        self._map_selected_obs_type = None
+        if hasattr(self, '_map_obs_edit_label'):
+            self._map_obs_edit_label.configure(text="No se encontró obstáculo")
+        self._redraw_map_static()
+
+    def _point_in_polygon(self, x, y, poly):
+        """Verifica si un punto está dentro de un polígono (ray casting)."""
+        n = len(poly)
+        inside = False
+        j = n - 1
+        for i in range(n):
+            xi, yi = poly[i]
+            xj, yj = poly[j]
+            if ((yi > y) != (yj > y)) and (x < (xj - xi) * (y - yi) / (yj - yi) + xi):
+                inside = not inside
+            j = i
+        return inside
+
+    def _map_fill_obs_edit_fields(self, obs, obs_type):
+        """Rellena los campos de edición con los datos del obstáculo."""
+        if not hasattr(self, '_map_obs_edit_x'):
+            return
+
+        self._map_obs_edit_x.delete(0, tk.END)
+        self._map_obs_edit_y.delete(0, tk.END)
+        self._map_obs_edit_size.delete(0, tk.END)
+
+        if obs_type == 'circle':
+            cx = obs.get('cx', 0)
+            cy = obs.get('cy', 0)
+            r = obs.get('r', 30)
+            self._map_obs_edit_x.insert(0, str(int(cx)))
+            self._map_obs_edit_y.insert(0, str(int(cy)))
+            self._map_obs_edit_size.insert(0, str(int(r)))
+            self._map_obs_edit_label.configure(text=f"Editando ⭕ #{self._map_selected_obs_idx+1}")
+        elif obs_type == 'poly':
+            pts = obs.get('poly', [])
+            if pts:
+                cx = sum(p[0] for p in pts) / len(pts)
+                cy = sum(p[1] for p in pts) / len(pts)
+                self._map_obs_edit_x.insert(0, str(int(cx)))
+                self._map_obs_edit_y.insert(0, str(int(cy)))
+                self._map_obs_edit_size.insert(0, "—")
+            self._map_obs_edit_label.configure(text=f"Editando ⬡ #{self._map_selected_obs_idx+1} (solo mover)")
+
+    def _map_apply_obs_edit(self):
+        """Aplica los cambios al obstáculo seleccionado en el mapa."""
+        if self._map_selected_obs_idx is None or self._map_selected_obs_type is None:
+            return
+
+        idx = self._map_selected_obs_idx
+        obs_type = self._map_selected_obs_type
+
+        try:
+            new_x = int(self._map_obs_edit_x.get())
+            new_y = int(self._map_obs_edit_y.get())
+            size_str = self._map_obs_edit_size.get()
+            new_size = int(size_str) if size_str != "—" else None
+        except ValueError:
+            return
+
+        if obs_type == 'circle':
+            if idx < len(self._excl_circles):
+                self._excl_circles[idx]['cx'] = new_x
+                self._excl_circles[idx]['cy'] = new_y
+                if new_size is not None:
+                    self._excl_circles[idx]['r'] = new_size
+                print(f"[MAP] Círculo #{idx+1} actualizado")
+        elif obs_type == 'poly':
+            if idx < len(self._excl_polys):
+                pts = self._excl_polys[idx].get('poly', [])
+                if pts:
+                    old_cx = sum(p[0] for p in pts) / len(pts)
+                    old_cy = sum(p[1] for p in pts) / len(pts)
+                    dx = new_x - old_cx
+                    dy = new_y - old_cy
+                    self._excl_polys[idx]['poly'] = [(p[0] + dx, p[1] + dy) for p in pts]
+                    print(f"[MAP] Polígono #{idx+1} movido")
+
+        # Sincronizar con backend
+        self._reapply_exclusions_to_backend()
+        self._redraw_map_static()
+
+    def _map_delete_selected_obs(self):
+        """Elimina el obstáculo seleccionado del mapa."""
+        if self._map_selected_obs_idx is None or self._map_selected_obs_type is None:
+            return
+
+        idx = self._map_selected_obs_idx
+        obs_type = self._map_selected_obs_type
+
+        if obs_type == 'circle':
+            if idx < len(self._excl_circles):
+                del self._excl_circles[idx]
+                print(f"[MAP] Círculo #{idx+1} eliminado")
+        elif obs_type == 'poly':
+            if idx < len(self._excl_polys):
+                del self._excl_polys[idx]
+                print(f"[MAP] Polígono #{idx+1} eliminado")
+
+        self._map_selected_obs_idx = None
+        self._map_selected_obs_type = None
+        if hasattr(self, '_map_obs_edit_label'):
+            self._map_obs_edit_label.configure(text="Clic en ✋ y luego en obstáculo")
+        if hasattr(self, '_map_obs_edit_x'):
+            self._map_obs_edit_x.delete(0, tk.END)
+            self._map_obs_edit_y.delete(0, tk.END)
+            self._map_obs_edit_size.delete(0, tk.END)
+
+        # Sincronizar con backend
+        self._reapply_exclusions_to_backend()
         self._redraw_map_static()
 
     def _start_geofence_rect(self):
@@ -2961,6 +3184,20 @@ class MiniRemoteApp:
         tk.Entry(obs_row, textvariable=self._mission_obs_radius, width=5).pack(side="left", padx=4)
         tk.Label(obs_row, text="cm", bg=BG_CARD, font=("Arial", 8)).pack(side="left")
 
+        # Selector de capa para obstáculos
+        layer_colors = ["#28a745", "#fd7e14", "#007bff"]  # Verde, Naranja, Azul
+        self._mission_draw_layer_var = tk.StringVar(value="1")
+
+        layer_row = tk.Frame(tools_content, bg=BG_CARD)
+        layer_row.pack(fill="x", pady=2)
+        tk.Label(layer_row, text="Capa:", bg=BG_CARD, font=("Arial", 8)).pack(side="left")
+
+        for val, color, txt in [("1", layer_colors[0], "C1"), ("2", layer_colors[1], "C2"),
+                                 ("3", layer_colors[2], "C3"), ("all", "#6c757d", "ALL")]:
+            tk.Radiobutton(layer_row, text=txt, variable=self._mission_draw_layer_var, value=val,
+                           bg=color, fg="white", selectcolor=color, activebackground=color,
+                           indicatoron=0, width=4, font=("Arial", 8, "bold")).pack(side="left", padx=1)
+
         # Botones para polígonos y eliminar
         obs_btn_row = tk.Frame(tools_content, bg=BG_CARD)
         obs_btn_row.pack(fill="x", pady=2)
@@ -3009,7 +3246,7 @@ class MiniRemoteApp:
                   bg="#dc3545", fg="white", font=("Arial", 8, "bold"), bd=0, padx=8).pack(side="left", padx=2)
 
         # ═══════════════════════════════════════════════════════════════════
-        # SECCIÓN: GEOFENCE
+        # SECCIÓN: GEOFENCE (zona segura) - Versión completa
         # ═══════════════════════════════════════════════════════════════════
         card_gf = tk.Frame(side_panel, bg=BG_CARD, bd=1, relief="solid")
         card_gf.pack(fill="x", padx=4, pady=4)
@@ -3017,43 +3254,202 @@ class MiniRemoteApp:
         tk.Label(card_gf, text="  GEOFENCE (zona segura)", font=("Arial", 9, "bold"),
                  bg=BG_HEADER, fg=FG_HEADER, anchor="w").pack(fill="x", ipady=4)
 
-        gf_content = tk.Frame(card_gf, bg=BG_CARD)
-        gf_content.pack(fill="x", padx=8, pady=8)
+        content_gf = tk.Frame(card_gf, bg=BG_CARD)
+        content_gf.pack(fill="x", padx=8, pady=8)
 
-        # Coordenadas del geofence
-        self._mgf_x1 = tk.IntVar(value=-200)
-        self._mgf_y1 = tk.IntVar(value=-200)
-        self._mgf_x2 = tk.IntVar(value=200)
-        self._mgf_y2 = tk.IntVar(value=200)
-        self._mgf_zmin = tk.IntVar(value=20)
-        self._mgf_zmax = tk.IntVar(value=150)
+        # Botón para dibujar en el mapa
+        tk.Button(content_gf, text="📍 Dibujar zona (2 clics)", command=self._mission_start_geofence_rect,
+                  bg=ACCENT, fg="white", font=("Arial", 8), bd=0,
+                  activebackground="#138496").pack(fill="x", pady=(0, 6))
 
-        r1 = tk.Frame(gf_content, bg=BG_CARD)
-        r1.pack(fill="x", pady=1)
-        tk.Label(r1, text="X:", bg=BG_CARD, font=("Arial", 8), width=3).pack(side="left")
-        tk.Entry(r1, textvariable=self._mgf_x1, width=5).pack(side="left", padx=2)
-        tk.Label(r1, text="a", bg=BG_CARD, font=("Arial", 8)).pack(side="left")
-        tk.Entry(r1, textvariable=self._mgf_x2, width=5).pack(side="left", padx=2)
-        tk.Label(r1, text="cm", bg=BG_CARD, font=("Arial", 8)).pack(side="left")
+        # Fila 1: X1, Y1 (esquina 1)
+        row1 = tk.Frame(content_gf, bg=BG_CARD)
+        row1.pack(fill="x", pady=1)
+        tk.Label(row1, text="Esquina 1:", bg=BG_CARD, font=("Arial", 8)).pack(side="left")
+        tk.Entry(row1, textvariable=self.gf_x1_var, width=5, justify="center").pack(side="left", padx=1)
+        tk.Entry(row1, textvariable=self.gf_y1_var, width=5, justify="center").pack(side="left", padx=1)
 
-        r2 = tk.Frame(gf_content, bg=BG_CARD)
-        r2.pack(fill="x", pady=1)
-        tk.Label(r2, text="Y:", bg=BG_CARD, font=("Arial", 8), width=3).pack(side="left")
-        tk.Entry(r2, textvariable=self._mgf_y1, width=5).pack(side="left", padx=2)
-        tk.Label(r2, text="a", bg=BG_CARD, font=("Arial", 8)).pack(side="left")
-        tk.Entry(r2, textvariable=self._mgf_y2, width=5).pack(side="left", padx=2)
-        tk.Label(r2, text="cm", bg=BG_CARD, font=("Arial", 8)).pack(side="left")
+        # Fila 2: X2, Y2 (esquina 2)
+        row2 = tk.Frame(content_gf, bg=BG_CARD)
+        row2.pack(fill="x", pady=1)
+        tk.Label(row2, text="Esquina 2:", bg=BG_CARD, font=("Arial", 8)).pack(side="left")
+        tk.Entry(row2, textvariable=self.gf_x2_var, width=5, justify="center").pack(side="left", padx=1)
+        tk.Entry(row2, textvariable=self.gf_y2_var, width=5, justify="center").pack(side="left", padx=1)
 
-        r3 = tk.Frame(gf_content, bg=BG_CARD)
-        r3.pack(fill="x", pady=1)
-        tk.Label(r3, text="Z:", bg=BG_CARD, font=("Arial", 8), width=3).pack(side="left")
-        tk.Entry(r3, textvariable=self._mgf_zmin, width=5).pack(side="left", padx=2)
-        tk.Label(r3, text="a", bg=BG_CARD, font=("Arial", 8)).pack(side="left")
-        tk.Entry(r3, textvariable=self._mgf_zmax, width=5).pack(side="left", padx=2)
-        tk.Label(r3, text="cm", bg=BG_CARD, font=("Arial", 8)).pack(side="left")
+        # Fila 3: Z min y Z max
+        row3 = tk.Frame(content_gf, bg=BG_CARD)
+        row3.pack(fill="x", pady=1)
+        tk.Label(row3, text="Altura Z:", bg=BG_CARD, font=("Arial", 8)).pack(side="left")
+        tk.Entry(row3, textvariable=self.gf_zmin_var, width=4, justify="center").pack(side="left", padx=1)
+        tk.Label(row3, text="-", bg=BG_CARD).pack(side="left")
+        tk.Entry(row3, textvariable=self.gf_zmax_var, width=4, justify="center").pack(side="left", padx=1)
+        tk.Label(row3, text="cm", bg=BG_CARD, font=("Arial", 8)).pack(side="left")
 
-        tk.Button(gf_content, text="✓ Aplicar Geofence", command=self._mission_apply_geofence,
-                  bg="#28a745", fg="white", font=("Arial", 8), bd=0).pack(fill="x", pady=4)
+        # Fila 4: Modo
+        row4 = tk.Frame(content_gf, bg=BG_CARD)
+        row4.pack(fill="x", pady=1)
+        tk.Label(row4, text="Modo:", bg=BG_CARD, font=("Arial", 8)).pack(side="left")
+        tk.Radiobutton(row4, text="Soft", variable=self.gf_mode_var, value="soft",
+                       bg=BG_CARD, activebackground=BG_CARD, font=("Arial", 8)).pack(side="left")
+        tk.Radiobutton(row4, text="Hard", variable=self.gf_mode_var, value="hard",
+                       bg=BG_CARD, activebackground=BG_CARD, font=("Arial", 8)).pack(side="left")
+
+        # Fila 5: Botones
+        row5 = tk.Frame(content_gf, bg=BG_CARD)
+        row5.pack(fill="x", pady=(6, 0))
+        tk.Button(row5, text="✓ Activar", command=self.on_gf_activate,
+                  bg="#28a745", fg="white", font=("Arial", 8), bd=0,
+                  activebackground="#218838").pack(side="left", fill="x", expand=True, padx=1)
+        tk.Button(row5, text="✗ Desactivar", command=self.on_gf_disable,
+                  bg="#6c757d", fg="white", font=("Arial", 8), bd=0,
+                  activebackground="#5a6268").pack(side="left", fill="x", expand=True, padx=1)
+        tk.Button(row5, text="🗑", command=self._clear_geofence,
+                  bg="#dc3545", fg="white", font=("Arial", 8), bd=0, width=3,
+                  activebackground="#c82333").pack(side="left", padx=1)
+
+        # ═══════════════════════════════════════════════════════════════════
+        # SECCIÓN: CAPAS DE ALTITUD
+        # ═══════════════════════════════════════════════════════════════════
+        card_layers = tk.Frame(side_panel, bg=BG_CARD, bd=1, relief="solid")
+        card_layers.pack(fill="x", padx=4, pady=4)
+
+        tk.Label(card_layers, text="  CAPAS DE ALTITUD", font=("Arial", 9, "bold"),
+                 bg=BG_HEADER, fg=FG_HEADER, anchor="w").pack(fill="x", ipady=4)
+
+        layers_container = tk.Frame(card_layers, bg=BG_CARD)
+        layers_container.pack(fill="x", padx=6, pady=6)
+
+        # Colores de capas
+        layer_colors = ["#28a745", "#fd7e14", "#007bff"]
+
+        # Obtener valores actuales de las capas
+        if hasattr(self.dron, "get_layers"):
+            layers = self.dron.get_layers()
+        else:
+            layers = [
+                {"z_min": 0, "z_max": 60},
+                {"z_min": 60, "z_max": 120},
+                {"z_min": 120, "z_max": 200},
+            ]
+
+        # Inicializar variables si no existen
+        if self._layer1_max_var is None:
+            self._layer1_max_var = tk.IntVar(value=int(layers[0]["z_max"]))
+        if self._layer2_max_var is None:
+            self._layer2_max_var = tk.IntVar(value=int(layers[1]["z_max"]))
+        if self._layer3_max_var is None:
+            self._layer3_max_var = tk.IntVar(value=int(layers[2]["z_max"]))
+
+        # Variables para mostrar rangos
+        if not hasattr(self, '_mission_layer1_range_var'):
+            self._mission_layer1_range_var = tk.StringVar(value=f"0 - {layers[0]['z_max']} cm")
+            self._mission_layer2_range_var = tk.StringVar(value=f"{layers[0]['z_max']} - {layers[1]['z_max']} cm")
+            self._mission_layer3_range_var = tk.StringVar(value=f"{layers[1]['z_max']} - {layers[2]['z_max']} cm")
+
+        MIN_GAP = 20
+
+        def update_mission_ranges():
+            c1 = self._layer1_max_var.get()
+            c2 = self._layer2_max_var.get()
+            c3 = self._layer3_max_var.get()
+            self._mission_layer1_range_var.set(f"0 - {c1} cm")
+            self._mission_layer2_range_var.set(f"{c1} - {c2} cm")
+            self._mission_layer3_range_var.set(f"{c2} - {c3} cm")
+
+        def on_mc1_change(*args):
+            c1 = self._layer1_max_var.get()
+            c2 = self._layer2_max_var.get()
+            if c1 >= c2 - MIN_GAP:
+                self._layer2_max_var.set(c1 + MIN_GAP)
+            update_mission_ranges()
+
+        def on_mc2_change(*args):
+            c1 = self._layer1_max_var.get()
+            c2 = self._layer2_max_var.get()
+            c3 = self._layer3_max_var.get()
+            if c2 <= c1 + MIN_GAP:
+                self._layer1_max_var.set(c2 - MIN_GAP)
+            if c2 >= c3 - MIN_GAP:
+                self._layer3_max_var.set(c2 + MIN_GAP)
+            update_mission_ranges()
+
+        def on_mc3_change(*args):
+            c2 = self._layer2_max_var.get()
+            c3 = self._layer3_max_var.get()
+            if c3 <= c2 + MIN_GAP:
+                self._layer2_max_var.set(c3 - MIN_GAP)
+            update_mission_ranges()
+
+        # Capa 3 (arriba - azul)
+        layer3_frame = tk.Frame(layers_container, bg=layer_colors[2], bd=0)
+        layer3_frame.pack(fill="x", padx=2, pady=1)
+        tk.Label(layer3_frame, text="C3", font=("Arial", 9, "bold"),
+                 bg=layer_colors[2], fg="white", width=3).pack(side="left", padx=2)
+        tk.Scale(layer3_frame, from_=100, to=300, orient="horizontal",
+                 variable=self._layer3_max_var, length=90, sliderlength=18,
+                 bg=layer_colors[2], fg="white", troughcolor=layer_colors[2],
+                 highlightthickness=0, font=("Arial", 7), bd=0,
+                 command=lambda v: on_mc3_change()).pack(side="left", padx=2)
+        tk.Label(layer3_frame, textvariable=self._mission_layer3_range_var, font=("Arial", 7),
+                 bg=layer_colors[2], fg="white", width=10).pack(side="right", padx=2)
+
+        # Capa 2 (medio - naranja)
+        layer2_frame = tk.Frame(layers_container, bg=layer_colors[1], bd=0)
+        layer2_frame.pack(fill="x", padx=2, pady=1)
+        tk.Label(layer2_frame, text="C2", font=("Arial", 9, "bold"),
+                 bg=layer_colors[1], fg="white", width=3).pack(side="left", padx=2)
+        tk.Scale(layer2_frame, from_=50, to=250, orient="horizontal",
+                 variable=self._layer2_max_var, length=90, sliderlength=18,
+                 bg=layer_colors[1], fg="white", troughcolor=layer_colors[1],
+                 highlightthickness=0, font=("Arial", 7), bd=0,
+                 command=lambda v: on_mc2_change()).pack(side="left", padx=2)
+        tk.Label(layer2_frame, textvariable=self._mission_layer2_range_var, font=("Arial", 7),
+                 bg=layer_colors[1], fg="white", width=10).pack(side="right", padx=2)
+
+        # Capa 1 (abajo - verde)
+        layer1_frame = tk.Frame(layers_container, bg=layer_colors[0], bd=0)
+        layer1_frame.pack(fill="x", padx=2, pady=1)
+        tk.Label(layer1_frame, text="C1", font=("Arial", 9, "bold"),
+                 bg=layer_colors[0], fg="white", width=3).pack(side="left", padx=2)
+        tk.Scale(layer1_frame, from_=20, to=150, orient="horizontal",
+                 variable=self._layer1_max_var, length=90, sliderlength=18,
+                 bg=layer_colors[0], fg="white", troughcolor=layer_colors[0],
+                 highlightthickness=0, font=("Arial", 7), bd=0,
+                 command=lambda v: on_mc1_change()).pack(side="left", padx=2)
+        tk.Label(layer1_frame, textvariable=self._mission_layer1_range_var, font=("Arial", 7),
+                 bg=layer_colors[0], fg="white", width=10).pack(side="right", padx=2)
+
+        # Suelo
+        suelo_frame = tk.Frame(layers_container, bg="#8B4513")
+        suelo_frame.pack(fill="x", padx=2, pady=(4, 2))
+        tk.Label(suelo_frame, text="═══ SUELO ═══", font=("Arial", 8, "bold"),
+                 bg="#8B4513", fg="#FFE4C4").pack(fill="x", ipady=2)
+
+        # Botón Aplicar
+        tk.Button(layers_container, text="✓ Aplicar capas", command=self._apply_layers,
+                  bg="#28a745", fg="white", font=("Arial", 8, "bold"), bd=0,
+                  activebackground="#218838", cursor="hand2").pack(fill="x", padx=2, pady=(6, 4))
+
+        # ═══════════════════════════════════════════════════════════════════
+        # SECCIÓN: PLANTILLAS
+        # ═══════════════════════════════════════════════════════════════════
+        card_plantillas = tk.Frame(side_panel, bg=BG_CARD, bd=1, relief="solid")
+        card_plantillas.pack(fill="x", padx=4, pady=4)
+
+        tk.Label(card_plantillas, text="  PLANTILLAS", font=("Arial", 9, "bold"),
+                 bg=BG_HEADER, fg=FG_HEADER, anchor="w").pack(fill="x", ipady=4)
+
+        content_plantillas = tk.Frame(card_plantillas, bg=BG_CARD)
+        content_plantillas.pack(fill="x", padx=8, pady=8)
+
+        btn_frame_plantillas = tk.Frame(content_plantillas, bg=BG_CARD)
+        btn_frame_plantillas.pack(fill="x")
+        tk.Button(btn_frame_plantillas, text="💾 Guardar", command=self._save_template,
+                  bg="#28a745", fg="white", font=("Arial", 8), bd=0,
+                  activebackground="#218838").pack(side="left", fill="x", expand=True, padx=2)
+        tk.Button(btn_frame_plantillas, text="📂 Cargar", command=self._load_template,
+                  bg="#17a2b8", fg="white", font=("Arial", 8), bd=0,
+                  activebackground="#138496").pack(side="left", fill="x", expand=True, padx=2)
 
         # ═══════════════════════════════════════════════════════════════════
         # SECCIÓN: PLAN DE VUELO
@@ -3286,16 +3682,21 @@ class MiniRemoteApp:
             fill_color = "#fff3cd" if is_selected else "#ffcccc"
             line_width = 4 if is_selected else 2
 
+            # Calcular centro para el texto de capa
+            text_cx, text_cy = 0, 0
+
             if obs_type == 'circle':
                 cx, cy = self._mission_world_to_canvas(obs['cx'], obs['cy'])
                 r = obs['r'] * PX_PER_CM
                 self._mission_canvas.create_oval(cx - r, cy - r, cx + r, cy + r,
                                                   outline=outline_color, fill=fill_color, width=line_width)
+                text_cx, text_cy = cx, cy
             elif obs_type == 'rect':
                 x1, y1 = self._mission_world_to_canvas(obs['x1'], obs['y1'])
                 x2, y2 = self._mission_world_to_canvas(obs['x2'], obs['y2'])
                 self._mission_canvas.create_rectangle(x1, y1, x2, y2,
                                                        outline=outline_color, fill=fill_color, width=line_width)
+                text_cx, text_cy = (x1 + x2) / 2, (y1 + y2) / 2
             elif obs_type == 'poly':
                 points = []
                 for px, py in obs['points']:
@@ -3304,6 +3705,18 @@ class MiniRemoteApp:
                 if len(points) >= 6:
                     self._mission_canvas.create_polygon(points, outline=outline_color,
                                                          fill=fill_color, width=line_width)
+                    # Centroide del polígono
+                    pts = obs['points']
+                    centroid_x = sum(p[0] for p in pts) / len(pts)
+                    centroid_y = sum(p[1] for p in pts) / len(pts)
+                    text_cx, text_cy = self._mission_world_to_canvas(centroid_x, centroid_y)
+
+            # Mostrar en qué capas está el obstáculo
+            excl_layers = self._get_mission_exclusion_layers(obs)
+            if excl_layers:
+                layers_text = "C" + ",".join(str(l) for l in excl_layers)
+                self._mission_canvas.create_text(text_cx, text_cy, text=layers_text,
+                                                  font=("Arial", 8, "bold"), fill=outline_color)
 
         # Dibujar puntos temporales de rectángulo
         for px, py in self._mission_rect_points:
@@ -3477,7 +3890,8 @@ class MiniRemoteApp:
 
         elif tool == "obstacle":
             r = self._mission_obs_radius.get()
-            obs = {'type': 'circle', 'cx': round(wx, 1), 'cy': round(wy, 1), 'r': r}
+            zmin, zmax = self._get_mission_layer_z_range()
+            obs = {'type': 'circle', 'cx': round(wx, 1), 'cy': round(wy, 1), 'r': r, 'zmin': zmin, 'zmax': zmax}
             self._mission_exclusions.append(obs)
             self._draw_mission_map()
 
@@ -3485,10 +3899,12 @@ class MiniRemoteApp:
             self._mission_rect_points.append((round(wx, 1), round(wy, 1)))
             if len(self._mission_rect_points) == 2:
                 p1, p2 = self._mission_rect_points
+                zmin, zmax = self._get_mission_layer_z_range()
                 obs = {
                     'type': 'rect',
                     'x1': min(p1[0], p2[0]), 'y1': min(p1[1], p2[1]),
-                    'x2': max(p1[0], p2[0]), 'y2': max(p1[1], p2[1])
+                    'x2': max(p1[0], p2[0]), 'y2': max(p1[1], p2[1]),
+                    'zmin': zmin, 'zmax': zmax
                 }
                 self._mission_exclusions.append(obs)
                 self._mission_rect_points.clear()
@@ -3510,6 +3926,55 @@ class MiniRemoteApp:
             self._selected_obs_idx = None
             self._obs_edit_label.configure(text="Clic en ✋ y luego en obstáculo")
             self._draw_mission_map()
+
+        elif tool == "geofence_rect":
+            # Dibujar geofence con 2 clics
+            if not hasattr(self, '_mission_gf_pts'):
+                self._mission_gf_pts = []
+
+            self._mission_gf_pts.append((wx, wy))
+
+            # Mostrar punto temporal
+            cx_px, cy_px = self._mission_world_to_canvas(wx, wy)
+            self._mission_canvas.create_oval(
+                cx_px - 5, cy_px - 5, cx_px + 5, cy_px + 5,
+                fill="#00aa00", outline="white", width=2, tags="gf_temp"
+            )
+
+            if len(self._mission_gf_pts) == 2:
+                x1, y1 = self._mission_gf_pts[0]
+                x2, y2 = self._mission_gf_pts[1]
+
+                # Actualizar las variables de coordenadas (compartidas)
+                self.gf_x1_var.set(str(int(min(x1, x2))))
+                self.gf_y1_var.set(str(int(min(y1, y2))))
+                self.gf_x2_var.set(str(int(max(x1, x2))))
+                self.gf_y2_var.set(str(int(max(y1, y2))))
+
+                # Guardar geofence local para misión
+                self._mission_geofence = {
+                    'x1': min(x1, x2), 'y1': min(y1, y2),
+                    'x2': max(x1, x2), 'y2': max(y1, y2)
+                }
+
+                width_x = abs(x2 - x1)
+                width_y = abs(y2 - y1)
+
+                # Limpiar
+                self._mission_gf_pts.clear()
+                self._mission_tool.set("waypoint")
+                self._mission_canvas.delete("gf_temp")
+
+                self._hud_show(f"Zona definida: {width_x:.0f}x{width_y:.0f} cm", 2.0)
+                self._draw_mission_map()
+
+    def _mission_start_geofence_rect(self):
+        """Inicia el dibujo de la zona de geofence en el mapa de misiones."""
+        if not hasattr(self, '_mission_gf_pts'):
+            self._mission_gf_pts = []
+        self._mission_gf_pts.clear()
+        self._mission_tool.set("geofence_rect")
+        self._hud_show("Clic en 2 esquinas del geofence", 3.0)
 
     def _load_obs_to_edit(self, obs, idx):
         """Carga los datos del obstáculo en los campos de edición."""
@@ -3619,10 +4084,65 @@ class MiniRemoteApp:
     def _close_mission_polygon(self):
         """Cierra el polígono de obstáculo actual."""
         if len(self._mission_poly_points) >= 3:
-            obs = {'type': 'poly', 'points': list(self._mission_poly_points)}
+            zmin, zmax = self._get_mission_layer_z_range()
+            obs = {'type': 'poly', 'points': list(self._mission_poly_points), 'zmin': zmin, 'zmax': zmax}
             self._mission_exclusions.append(obs)
         self._mission_poly_points.clear()
         self._draw_mission_map()
+
+    def _get_mission_exclusion_layers(self, obs):
+        """Determina en qué capas está un obstáculo basándose en su zmin/zmax."""
+        zmin = obs.get('zmin', 0)
+        zmax = obs.get('zmax', 200)
+
+        # Obtener configuración de capas
+        if hasattr(self.dron, "get_layers"):
+            layers = self.dron.get_layers()
+        else:
+            layers = [
+                {"z_min": 0, "z_max": 60},
+                {"z_min": 60, "z_max": 120},
+                {"z_min": 120, "z_max": 200},
+            ]
+
+        result = []
+        for i, layer in enumerate(layers):
+            layer_zmin = layer.get("z_min", 0)
+            layer_zmax = layer.get("z_max", 200)
+            # Si hay solapamiento entre el obstáculo y la capa
+            if zmin < layer_zmax and zmax > layer_zmin:
+                result.append(i + 1)
+
+        return result if result else [1, 2, 3]  # Si no hay datos, mostrar "todas"
+
+    def _get_mission_layer_z_range(self):
+        """Obtiene el rango Z para la capa seleccionada en el editor de misiones."""
+        layer = getattr(self, '_mission_draw_layer_var', None)
+        if not layer:
+            return 0, 200
+
+        layer_str = layer.get()
+
+        # Obtener configuración de capas
+        if hasattr(self.dron, "get_layers"):
+            layers = self.dron.get_layers()
+        else:
+            layers = [
+                {"z_min": 0, "z_max": 60},
+                {"z_min": 60, "z_max": 120},
+                {"z_min": 120, "z_max": 200},
+            ]
+
+        if layer_str == "all":
+            return 0, int(layers[-1]["z_max"]) if layers else 200
+        elif layer_str == "1":
+            return int(layers[0]["z_min"]), int(layers[0]["z_max"])
+        elif layer_str == "2":
+            return int(layers[1]["z_min"]), int(layers[1]["z_max"])
+        elif layer_str == "3":
+            return int(layers[2]["z_min"]), int(layers[2]["z_max"])
+        else:
+            return 0, 200
 
     def _delete_last_obstacle(self):
         """Elimina el último obstáculo añadido."""
@@ -3910,9 +4430,9 @@ class MiniRemoteApp:
                     waypoints=waypoints_to_execute,
                     do_land=True,
                     return_home=use_return_home,
+                    face_target=True,  # Rotar hacia destino antes de moverse (como un coche)
                     blocking=True,
-                    on_wp_arrived=on_wp_arrived,
-                    on_action=on_action,
+                    on_wp=on_wp_arrived,
                     on_finish=on_finish
                 )
             except Exception as e:
