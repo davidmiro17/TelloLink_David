@@ -347,6 +347,9 @@ class MiniRemoteApp:
 
         tk.Label(row4, textvariable=self._joy_label_var, fg="#6c757d", bg="#1a1a1a",
                  font=("Arial", 8)).pack(side="right", padx=4)
+        tk.Button(row4, text="🎮", command=self._reconnect_joystick,
+                  bg="#1a1a1a", fg="#6c757d", font=("Arial", 9), bd=0,
+                  activebackground="#333", padx=4, pady=0).pack(side="right")
 
         # Variables de tiempo de vuelo
         self._flight_start_time = None
@@ -863,13 +866,13 @@ class MiniRemoteApp:
         with self._frame_lock:
             frame = None if self._last_bgr is None else self._last_bgr.copy()
         if frame is None:
-            self._hud_show(" Sin frame", 1.5)
+            self._hud_show("Sin frame", 1.5)
             return
         # Usar gestor de sesiones para obtener ruta
         path = self._session_manager.get_photo_path()
         try:
             cv2.imwrite(path, frame)
-            self._hud_show(f"📷 Guardada", 1.8)
+            self._hud_show("Foto guardada", 1.8)
         except Exception:
             self._hud_show("Error", 1.5)
 
@@ -889,7 +892,7 @@ class MiniRemoteApp:
         self._rec_path = self._session_manager.get_video_path()
         self._rec_running = True
         self._rec_writer = None
-        self._hud_show("⏺ Grabando", 1.5)
+        self._hud_show("Grabando...", 1.5)
 
     def _stop_recording(self):
         if self._rec_running:
@@ -900,60 +903,86 @@ class MiniRemoteApp:
             except Exception:
                 pass
             self._rec_writer = None
-            self._hud_show("Guardado", 1.5)
+            self._hud_show("Video guardado", 1.5)
 
     # FPV EXTERNO (ventana OpenCV - baja latencia)
     def toggle_fpv_external(self):
         """Alterna la ventana FPV externa (OpenCV)."""
-        if self._fpv_ext_running:
-            self.stop_fpv_external()
-        else:
-            self.start_fpv_external()
+        # Evitar clicks rápidos - usar flag de bloqueo
+        if hasattr(self, '_fpv_toggling') and self._fpv_toggling:
+            return
+        self._fpv_toggling = True
+
+        try:
+            if self._fpv_ext_running:
+                self.stop_fpv_external()
+            else:
+                self.start_fpv_external()
+        finally:
+            # Desbloquear después de un pequeño delay
+            def _unlock():
+                time.sleep(1.0)
+                self._fpv_toggling = False
+            threading.Thread(target=_unlock, daemon=True).start()
 
     def start_fpv_external(self):
         """Abre ventana FPV con OpenCV (baja latencia)."""
         if self._fpv_ext_running:
             return
-        # Activar stream si no está activo
-        try:
-            if hasattr(self.dron, "_tello"):
-                self.dron._tello.streamoff()
-                time.sleep(0.2)
-                self.dron._tello.streamon()
-                time.sleep(0.3)
-        except Exception:
-            pass
-        self._fpv_ext_running = True
-        self._fpv_ext_thread = threading.Thread(target=self._fpv_external_loop, daemon=True)
-        self._fpv_ext_thread.start()
-        self._hud_show("🖥 FPV Externo", 1.5)
 
-    def stop_fpv_external(self):
-        """Cierra la ventana FPV externa."""
-        self._fpv_ext_running = False
-        if self._fpv_ext_thread is not None:
-            try:
-                self._fpv_ext_thread.join(timeout=1.0)
-            except Exception:
-                pass
-        self._fpv_ext_thread = None
+        # Limpiar captura previa si existe
         if self._fpv_ext_cap is not None:
             try:
                 self._fpv_ext_cap.release()
             except Exception:
                 pass
             self._fpv_ext_cap = None
+            time.sleep(0.3)
+
+        self._fpv_ext_running = True
+        self._fpv_ext_thread = threading.Thread(target=self._fpv_external_loop, daemon=True)
+        self._fpv_ext_thread.start()
+        self._hud_show("FPV Externo", 1.5)
+
+    def stop_fpv_external(self):
+        """Cierra la ventana FPV externa."""
+        self._fpv_ext_running = False
+
+        # Esperar a que el thread termine
+        if self._fpv_ext_thread is not None:
+            try:
+                self._fpv_ext_thread.join(timeout=2.0)
+            except Exception:
+                pass
+        self._fpv_ext_thread = None
+
+        # Liberar la captura
+        if self._fpv_ext_cap is not None:
+            try:
+                self._fpv_ext_cap.release()
+            except Exception:
+                pass
+            self._fpv_ext_cap = None
+
+        # Cerrar ventana OpenCV
         try:
             cv2.destroyWindow("Tello FPV (Low Latency)")
+            cv2.waitKey(1)
         except Exception:
             pass
+
+        self._hud_show("FPV cerrado", 1.0)
 
     def _fpv_external_loop(self):
         """Loop de la ventana FPV externa con cv2.imshow (baja latencia)."""
         window_name = "Tello FPV (Low Latency)"
         try:
-            # Abrir captura UDP directa
-            self._fpv_ext_cap = cv2.VideoCapture("udp://0.0.0.0:11111", cv2.CAP_FFMPEG)
+            # Abrir captura UDP con opciones para permitir reconexión
+            # reuse=1: permite reutilizar el puerto aunque esté en TIME_WAIT
+            # timeout=5000000: timeout de 5 segundos (en microsegundos)
+            # overrun_nonfatal=1: no crashear si hay buffer overflow
+            udp_url = "udp://0.0.0.0:11111?reuse=1&timeout=5000000&overrun_nonfatal=1"
+            self._fpv_ext_cap = cv2.VideoCapture(udp_url, cv2.CAP_FFMPEG)
             if not self._fpv_ext_cap.isOpened():
                 self._hud_show("Error UDP", 2.0)
                 self._fpv_ext_running = False
@@ -962,6 +991,13 @@ class MiniRemoteApp:
             cv2.resizeWindow(window_name, 640, 480)
 
             while self._fpv_ext_running:
+                # Detectar si el usuario cerró la ventana con X
+                try:
+                    if cv2.getWindowProperty(window_name, cv2.WND_PROP_VISIBLE) < 1:
+                        break
+                except Exception:
+                    break
+
                 ok, frame = self._fpv_ext_cap.read()
                 if not ok or frame is None:
                     time.sleep(0.01)
@@ -981,9 +1017,12 @@ class MiniRemoteApp:
                     except Exception:
                         pass
 
+                # Dibujar overlays (REC, mensajes HUD) en la ventana externa
+                self._draw_overlays(frame)
+
                 cv2.imshow(window_name, frame)
                 key = cv2.waitKey(1) & 0xFF
-                if key == ord('q'):
+                if key == ord('q') or key == 27:  # Q o ESC
                     break
         except Exception:
             pass
@@ -997,6 +1036,7 @@ class MiniRemoteApp:
                 self._fpv_ext_cap = None
             try:
                 cv2.destroyWindow(window_name)
+                cv2.waitKey(1)
             except Exception:
                 pass
 
@@ -1099,7 +1139,7 @@ class MiniRemoteApp:
                 pass
 
     # JOYSTICK
-    def _init_joystick(self):
+    def _init_joystick(self, full_reinit: bool = False):
         if self._joy_running:
             return
 
@@ -1117,7 +1157,7 @@ class MiniRemoteApp:
                 expo=1.5
             )
 
-            if not controller.connect():
+            if not controller.connect(full_reinit=full_reinit):
                 print("[joy] No se pudo conectar al joystick")
                 def _ui():
                     self._joy_label_var.set(" —")
@@ -1210,6 +1250,21 @@ class MiniRemoteApp:
 
     def _stop_joystick(self):
         self._joy_running = False
+
+    def _reconnect_joystick(self):
+        """Detiene el joystick actual e intenta reconectar."""
+        print("[joy] Intentando reconectar joystick...")
+        self._joy_label_var.set("🔄 Buscando...")
+
+        def _reconnect_thread():
+            # Parar el hilo actual y esperar a que termine
+            self._joy_running = False
+            time.sleep(0.5)
+
+            # Llamar _init_joystick con full_reinit=True desde el hilo principal de Tk
+            self.root.after(0, lambda: self._init_joystick(full_reinit=True))
+
+        threading.Thread(target=_reconnect_thread, daemon=True).start()
 
     #MAPA
     def open_map_window(self):

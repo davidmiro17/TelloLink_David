@@ -1,5 +1,9 @@
 import pygame
 import time
+import os
+
+# Permitir eventos de joystick en segundo plano
+os.environ.setdefault("SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS", "1")
 
 
 class JoystickController:
@@ -28,23 +32,63 @@ class JoystickController:
 
         self.joystick = None
 
-    def connect(self) -> bool:
+    def connect(self, full_reinit: bool = False) -> bool:
+        """
+        Conecta al joystick.
 
-        pygame.init()
-        pygame.joystick.init()
+        Args:
+            full_reinit: Si True, reinicia pygame completamente (usar para reconexión)
+        """
+        try:
+            # Para reconexión: limpiar todo completamente
+            if full_reinit:
+                print("[Joystick] Reinicio completo de pygame...")
+                try:
+                    if self.joystick:
+                        self.joystick.quit()
+                        self.joystick = None
+                except:
+                    pass
+                try:
+                    pygame.joystick.quit()
+                except:
+                    pass
+                try:
+                    pygame.quit()
+                except:
+                    pass
 
-        if pygame.joystick.get_count() == 0:
-            print("[Joystick] No hay joysticks conectados")
+                # Esperar a que DirectX libere los recursos
+                time.sleep(0.3)
+
+                # Reinicializar pygame desde cero
+                pygame.init()
+            else:
+                # Inicialización normal (primera vez)
+                if not pygame.get_init():
+                    pygame.init()
+                pygame.joystick.init()
+
+            # Verificar joysticks disponibles
+            if pygame.joystick.get_count() == 0:
+                print("[Joystick] No hay joysticks conectados")
+                return False
+
+            self.joystick = pygame.joystick.Joystick(0)
+            self.joystick.init()
+
+            print(f"[Joystick] Conectado: {self.joystick.get_name()}")
+            print(f"[Joystick] Ejes: {self.joystick.get_numaxes()}")
+            print(f"[Joystick] Botones: {self.joystick.get_numbuttons()}")
+
+            return True
+
+        except pygame.error as e:
+            print(f"[Joystick] Error pygame: {e}")
             return False
-
-        self.joystick = pygame.joystick.Joystick(0)
-        self.joystick.init()
-
-        print(f"[Joystick] Conectado: {self.joystick.get_name()}")
-        print(f"[Joystick] Ejes: {self.joystick.get_numaxes()}")
-        print(f"[Joystick] Botones: {self.joystick.get_numbuttons()}")
-
-        return True
+        except Exception as e:
+            print(f"[Joystick] Error: {e}")
+            return False
 
     def _apply_deadzone(self, value: float) -> float:
 
