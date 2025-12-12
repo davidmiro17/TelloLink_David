@@ -116,6 +116,8 @@ class MiniRemoteApp:
         self._current_layer = 0
         self._last_layer = 0
         self._layer_label = None
+        self._mission_layer_label = None
+        self._mission_draw_layer_var = None
         self._layer1_min_var = None
         self._layer1_max_var = None
         self._layer2_min_var = None
@@ -905,140 +907,92 @@ class MiniRemoteApp:
             self._rec_writer = None
             self._hud_show("Video guardado", 1.5)
 
-    # FPV EXTERNO (ventana OpenCV - baja latencia)
+    # FPV EXTERNO (cv2.imshow con VideoCapture compartido)
     def toggle_fpv_external(self):
-        """Alterna la ventana FPV externa (OpenCV)."""
-        # Evitar clicks rápidos - usar flag de bloqueo
-        if hasattr(self, '_fpv_toggling') and self._fpv_toggling:
-            return
-        self._fpv_toggling = True
-
-        try:
-            if self._fpv_ext_running:
-                self.stop_fpv_external()
-            else:
-                self.start_fpv_external()
-        finally:
-            # Desbloquear después de un pequeño delay
-            def _unlock():
-                time.sleep(1.0)
-                self._fpv_toggling = False
-            threading.Thread(target=_unlock, daemon=True).start()
+        """Alterna la ventana FPV externa."""
+        if self._fpv_ext_running:
+            self.stop_fpv_external()
+        else:
+            self.start_fpv_external()
 
     def start_fpv_external(self):
-        """Abre ventana FPV con OpenCV (baja latencia)."""
+        """Abre ventana FPV externa con cv2.imshow (baja latencia)."""
         if self._fpv_ext_running:
             return
 
-        # Limpiar captura previa si existe
-        if self._fpv_ext_cap is not None:
-            try:
-                self._fpv_ext_cap.release()
-            except Exception:
-                pass
-            self._fpv_ext_cap = None
-            time.sleep(0.3)
+        # Asegurar que el stream está activo y _cv_cap existe
+        try:
+            if self._cv_cap is None or not self._cv_cap.isOpened():
+                self._want_stream_on = True
+                if hasattr(self.dron, "_tello"):
+                    self.dron._tello.streamon()
+                    time.sleep(0.3)
+                self._cv_cap = cv2.VideoCapture("udp://0.0.0.0:11111", cv2.CAP_FFMPEG)
+                self._cv_cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        except Exception:
+            pass
 
         self._fpv_ext_running = True
-        self._fpv_ext_thread = threading.Thread(target=self._fpv_external_loop, daemon=True)
+        self._fpv_ext_thread = threading.Thread(target=self._fpv_ext_cv_loop, daemon=True)
         self._fpv_ext_thread.start()
-        self._hud_show("FPV Externo", 1.5)
 
     def stop_fpv_external(self):
         """Cierra la ventana FPV externa."""
         self._fpv_ext_running = False
-
-        # Esperar a que el thread termine
-        if self._fpv_ext_thread is not None:
-            try:
-                self._fpv_ext_thread.join(timeout=2.0)
-            except Exception:
-                pass
-        self._fpv_ext_thread = None
-
-        # Liberar la captura
-        if self._fpv_ext_cap is not None:
-            try:
-                self._fpv_ext_cap.release()
-            except Exception:
-                pass
-            self._fpv_ext_cap = None
-
-        # Cerrar ventana OpenCV
+        # NO cerramos _cv_cap - se queda abierto para reutilizar
         try:
-            cv2.destroyWindow("Tello FPV (Low Latency)")
-            cv2.waitKey(1)
+            cv2.destroyWindow("Tello FPV")
         except Exception:
             pass
 
-        self._hud_show("FPV cerrado", 1.0)
+    def _fpv_ext_cv_loop(self):
+        """Loop de FPV externo usando cv2.imshow (rápido)."""
+        window_name = "Tello FPV"
+        cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+        cv2.resizeWindow(window_name, 640, 480)
 
-    def _fpv_external_loop(self):
-        """Loop de la ventana FPV externa con cv2.imshow (baja latencia)."""
-        window_name = "Tello FPV (Low Latency)"
-        try:
-            # Abrir captura UDP con opciones para permitir reconexión
-            # reuse=1: permite reutilizar el puerto aunque esté en TIME_WAIT
-            # timeout=5000000: timeout de 5 segundos (en microsegundos)
-            # overrun_nonfatal=1: no crashear si hay buffer overflow
-            udp_url = "udp://0.0.0.0:11111?reuse=1&timeout=5000000&overrun_nonfatal=1"
-            self._fpv_ext_cap = cv2.VideoCapture(udp_url, cv2.CAP_FFMPEG)
-            if not self._fpv_ext_cap.isOpened():
-                self._hud_show("Error UDP", 2.0)
-                self._fpv_ext_running = False
-                return
-            cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
-            cv2.resizeWindow(window_name, 640, 480)
-
-            while self._fpv_ext_running:
-                # Detectar si el usuario cerró la ventana con X
-                try:
-                    if cv2.getWindowProperty(window_name, cv2.WND_PROP_VISIBLE) < 1:
-                        break
-                except Exception:
+        while self._fpv_ext_running:
+            try:
+                # Detectar si cerraron la ventana con X
+                if cv2.getWindowProperty(window_name, cv2.WND_PROP_VISIBLE) < 1:
                     break
+            except Exception:
+                break
 
-                ok, frame = self._fpv_ext_cap.read()
-                if not ok or frame is None:
-                    time.sleep(0.01)
-                    continue
+            try:
+                if self._cv_cap is not None and self._cv_cap.isOpened():
+                    ok, frame = self._cv_cap.read()
+                    if ok and frame is not None:
+                        # Guardar para snapshots/grabación
+                        with self._frame_lock:
+                            self._last_bgr = frame.copy()
 
-                # Guardar frame para snapshots y grabación
-                with self._frame_lock:
-                    self._last_bgr = frame.copy()
+                        # Grabación
+                        if self._rec_running:
+                            if self._rec_writer is None:
+                                h, w = frame.shape[:2]
+                                self._start_writer((w, h))
+                            try:
+                                self._rec_writer.write(frame)
+                            except Exception:
+                                pass
 
-                # Grabación de video
-                if self._rec_running:
-                    if self._rec_writer is None:
-                        h, w = frame.shape[:2]
-                        self._start_writer((w, h))
-                    try:
-                        self._rec_writer.write(frame)
-                    except Exception:
-                        pass
+                        # Dibujar overlays
+                        self._draw_overlays(frame)
 
-                # Dibujar overlays (REC, mensajes HUD) en la ventana externa
-                self._draw_overlays(frame)
+                        cv2.imshow(window_name, frame)
 
-                cv2.imshow(window_name, frame)
                 key = cv2.waitKey(1) & 0xFF
-                if key == ord('q') or key == 27:  # Q o ESC
+                if key == ord('q') or key == 27:
                     break
-        except Exception:
-            pass
-        finally:
-            self._fpv_ext_running = False
-            if self._fpv_ext_cap is not None:
-                try:
-                    self._fpv_ext_cap.release()
-                except Exception:
-                    pass
-                self._fpv_ext_cap = None
-            try:
-                cv2.destroyWindow(window_name)
-                cv2.waitKey(1)
             except Exception:
                 pass
+
+        self._fpv_ext_running = False
+        try:
+            cv2.destroyWindow(window_name)
+        except Exception:
+            pass
 
     # TELEMETRÍA
     def _start_telemetry_update(self):
@@ -1275,7 +1229,7 @@ class MiniRemoteApp:
 
         self._map_win = tk.Toplevel(self.root)
         self._map_win.title("Mapa Geofence")
-        self._map_win.geometry(f"{MAP_SIZE_PX + 300}x{MAP_SIZE_PX + 50}")
+        self._map_win.geometry(f"{MAP_SIZE_PX + 320}x{MAP_SIZE_PX + 50}")
 
         # Canvas
         self.map_canvas = tk.Canvas(
@@ -1292,7 +1246,7 @@ class MiniRemoteApp:
         side_container.pack(side="right", fill="y", padx=10, pady=10)
 
         # Canvas para scroll
-        side_canvas = tk.Canvas(side_container, width=220, highlightthickness=0)
+        side_canvas = tk.Canvas(side_container, width=280, highlightthickness=0)
         scrollbar = tk.Scrollbar(side_container, orient="vertical", command=side_canvas.yview)
         side_panel = tk.Frame(side_canvas)
 
@@ -1667,6 +1621,9 @@ class MiniRemoteApp:
         )
         self._layer_label.place(x=20, y=20)
 
+        # Inicializar indicador con la capa de trabajo seleccionada
+        self._on_draw_layer_change()
+
         # Dibujar
         self._map_static_drawn = False
         self._redraw_map_static()
@@ -1709,8 +1666,10 @@ class MiniRemoteApp:
         if self._incl_rect:
             self._draw_inclusion_rect(self._incl_rect)
 
-        # Obtener capa actual del dron para colorear exclusiones
-        current_layer = self._current_layer if self._current_layer > 0 else 1
+        # Obtener capa de trabajo para colorear exclusiones
+        # Si current_layer es 0, significa "ALL" - mostrar todos en color fuerte
+        current_layer = self._current_layer
+        show_all = (current_layer == 0)
 
         # Colores para exclusiones
         COLOR_IN_LAYER = "#ff0000"      # Rojo - obstáculo en capa actual
@@ -1724,9 +1683,9 @@ class MiniRemoteApp:
             cx_px, cy_px = self._world_to_canvas(cx_w, cy_w)
             r_px = r_w * PX_PER_CM
 
-            # Determinar si está en la capa actual
+            # Determinar si está en la capa actual (o ALL = todos)
             excl_layers = self._get_exclusion_layers(c)
-            in_current_layer = current_layer in excl_layers
+            in_current_layer = show_all or (current_layer in excl_layers)
 
             # Verificar si está seleccionado
             is_selected = (getattr(self, '_map_selected_obs_idx', None) == i and
@@ -1763,9 +1722,9 @@ class MiniRemoteApp:
                 for (px, py) in pts:
                     canvas_pts.extend(self._world_to_canvas(px, py))
 
-                # Determinar si está en la capa actual
+                # Determinar si está en la capa actual (o ALL = todos)
                 excl_layers = self._get_exclusion_layers(p)
-                in_current_layer = current_layer in excl_layers
+                in_current_layer = show_all or (current_layer in excl_layers)
 
                 # Verificar si está seleccionado
                 is_selected = (getattr(self, '_map_selected_obs_idx', None) == i and
@@ -2402,27 +2361,52 @@ class MiniRemoteApp:
 
             self._excl_circles = data.get("circles", [])
             self._excl_polys = data.get("polygons", [])
-            self._incl_rect = data.get("inclusion")
-            self._incl_zmin_var.set(data.get("zmin", 0))
-            self._incl_zmax_var.set(data.get("zmax", 120))
 
-            if self._incl_rect:
-                _, _, max_x, max_y = self._incl_rect
-                self.gf_max_x_var.set(str(int(max_x)))
-                self.gf_max_y_var.set(str(int(max_y)))
+            try:
+                self._incl_rect = data.get("inclusion")
+                if hasattr(self, '_incl_zmin_var'):
+                    self._incl_zmin_var.set(data.get("zmin", 0))
+                if hasattr(self, '_incl_zmax_var'):
+                    self._incl_zmax_var.set(data.get("zmax", 120))
 
-            # Cargar configuración de capas
-            layers_config = data.get("layers", {})
-            if layers_config:
-                self._layer1_max_var.set(layers_config.get("c1_max", 60))
-                self._layer2_max_var.set(layers_config.get("c2_max", 120))
-                self._layer3_max_var.set(layers_config.get("c3_max", 200))
-                # Aplicar las capas al dron
-                self._apply_layers()
+                if self._incl_rect:
+                    _, _, max_x, max_y = self._incl_rect
+                    if hasattr(self, 'gf_max_x_var'):
+                        self.gf_max_x_var.set(str(int(max_x)))
+                    if hasattr(self, 'gf_max_y_var'):
+                        self.gf_max_y_var.set(str(int(max_y)))
+            except:
+                pass
 
-            self._reapply_exclusions_to_backend()
+            try:
+                layers_config = data.get("layers", {})
+                if layers_config and hasattr(self, '_layer1_max_var'):
+                    self._layer1_max_var.set(layers_config.get("c1_max", 60))
+                    self._layer2_max_var.set(layers_config.get("c2_max", 120))
+                    self._layer3_max_var.set(layers_config.get("c3_max", 200))
+                    self._apply_layers()
+            except:
+                pass
 
-            self._redraw_map_static()
+            try:
+                self._reapply_exclusions_to_backend()
+            except:
+                pass
+
+            # Redibujar ambos mapas si existen
+            try:
+                if hasattr(self, 'map_canvas') and self.map_canvas and self.map_canvas.winfo_exists():
+                    self._redraw_map_static()
+                    self.map_canvas.update_idletasks()
+            except:
+                pass
+            try:
+                if hasattr(self, '_mission_canvas') and self._mission_canvas and self._mission_canvas.winfo_exists():
+                    self._draw_mission_map()
+                    self._mission_canvas.update_idletasks()
+            except:
+                pass
+
             messagebox.showinfo("Plantilla", "Cargada correctamente.")
 
         except Exception as e:
@@ -2458,6 +2442,11 @@ class MiniRemoteApp:
     def _update_layer_indicator(self, z_cm):
         """Actualiza el indicador de capa en el mapa."""
         if not self._layer_label:
+            return
+
+        # Si el dron no está volando (altura <= 5cm), no sobrescribir el indicador
+        # de capa de trabajo seleccionada
+        if z_cm is None or z_cm <= 5:
             return
 
         # Obtener capa actual usando el método del dron
@@ -2584,8 +2573,9 @@ class MiniRemoteApp:
 
         result = []
         for i, (layer_zmin, layer_zmax) in enumerate(layers_ranges):
-            # Hay solapamiento si los rangos se intersectan
-            if not (excl_zmax < layer_zmin or excl_zmin > layer_zmax):
+            # Hay solapamiento si los rangos se intersectan (límites exclusivos)
+            # Un obstáculo en la frontera exacta (ej: zmax=60 con layer2 zmin=60) NO solapa
+            if excl_zmin < layer_zmax and excl_zmax > layer_zmin:
                 result.append(i + 1)
 
         return result if result else [1, 2, 3]
@@ -3151,7 +3141,7 @@ class MiniRemoteApp:
 
         self._mission_win = tk.Toplevel(self.root)
         self._mission_win.title("Editor de Misiones")
-        self._mission_win.geometry(f"{MAP_SIZE_PX + 320}x{MAP_SIZE_PX + 50}")
+        self._mission_win.geometry(f"{MAP_SIZE_PX + 360}x{MAP_SIZE_PX + 50}")
 
         # Estado de la misión
         self._mission_waypoints = []  # Lista de waypoints con acciones
@@ -3175,11 +3165,23 @@ class MiniRemoteApp:
         self._mission_canvas.pack(side="left", padx=10, pady=10)
         self._mission_canvas.bind("<Button-1>", self._on_mission_canvas_click)
 
+        # Indicador de capa actual (esquina superior izquierda del canvas)
+        self._mission_layer_label = tk.Label(
+            self._mission_win,
+            text="Capa 1\n(0-60 cm)",
+            font=("Arial", 14, "bold"),
+            bg="#28a745",  # Verde - capa 1 por defecto
+            fg="#ffffff",
+            padx=10,
+            pady=5
+        )
+        self._mission_layer_label.place(x=30, y=30)
+
         # Panel lateral con scroll
         side_container = tk.Frame(self._mission_win, bd=1, relief="groove")
         side_container.pack(side="right", fill="y", padx=10, pady=10)
 
-        side_canvas = tk.Canvas(side_container, width=280, highlightthickness=0)
+        side_canvas = tk.Canvas(side_container, width=320, highlightthickness=0)
         scrollbar = tk.Scrollbar(side_container, orient="vertical", command=side_canvas.yview)
         side_panel = tk.Frame(side_canvas)
 
@@ -3242,6 +3244,7 @@ class MiniRemoteApp:
         # Selector de capa para obstáculos
         layer_colors = ["#28a745", "#fd7e14", "#007bff"]  # Verde, Naranja, Azul
         self._mission_draw_layer_var = tk.StringVar(value="1")
+        self._mission_draw_layer_var.trace_add("write", self._on_mission_layer_change)
 
         layer_row = tk.Frame(tools_content, bg=BG_CARD)
         layer_row.pack(fill="x", pady=2)
@@ -3251,7 +3254,8 @@ class MiniRemoteApp:
                                  ("3", layer_colors[2], "C3"), ("all", "#6c757d", "ALL")]:
             tk.Radiobutton(layer_row, text=txt, variable=self._mission_draw_layer_var, value=val,
                            bg=color, fg="white", selectcolor=color, activebackground=color,
-                           indicatoron=0, width=4, font=("Arial", 8, "bold")).pack(side="left", padx=1)
+                           indicatoron=0, width=4, font=("Arial", 8, "bold"),
+                           command=self._on_mission_layer_change).pack(side="left", padx=1)
 
         # Botones para polígonos y eliminar
         obs_btn_row = tk.Frame(tools_content, bg=BG_CARD)
@@ -3499,10 +3503,10 @@ class MiniRemoteApp:
 
         btn_frame_plantillas = tk.Frame(content_plantillas, bg=BG_CARD)
         btn_frame_plantillas.pack(fill="x")
-        tk.Button(btn_frame_plantillas, text="💾 Guardar", command=self._save_template,
+        tk.Button(btn_frame_plantillas, text="💾 Guardar", command=self._save_mission_template,
                   bg="#28a745", fg="white", font=("Arial", 8), bd=0,
                   activebackground="#218838").pack(side="left", fill="x", expand=True, padx=2)
-        tk.Button(btn_frame_plantillas, text="📂 Cargar", command=self._load_template,
+        tk.Button(btn_frame_plantillas, text="📂 Cargar", command=self._load_mission_template,
                   bg="#17a2b8", fg="white", font=("Arial", 8), bd=0,
                   activebackground="#138496").pack(side="left", fill="x", expand=True, padx=2)
 
@@ -3694,6 +3698,38 @@ class MiniRemoteApp:
         wx = (mid - cy) / PX_PER_CM   # Y canvas → X mundo
         return wx, wy
 
+    def _on_mission_layer_change(self, *args):
+        """Actualiza el indicador de capa cuando cambia la selección en Editor de Misiones."""
+        if not self._mission_draw_layer_var:
+            return
+
+        layer = self._mission_draw_layer_var.get()
+        zmin, zmax = self._get_layer_z_range(layer)
+
+        # Actualizar el indicador grande de la esquina
+        if self._mission_layer_label:
+            # Colores consistentes con el tema
+            colors = {
+                "1": "#28a745",  # Verde - capa 1
+                "2": "#fd7e14",  # Naranja - capa 2
+                "3": "#007bff",  # Azul - capa 3
+                "all": "#6c757d",  # Gris - todas
+            }
+            bg_color = colors.get(layer, "#333333")
+
+            if layer == "all":
+                layer_text = "Todas las capas"
+            else:
+                layer_text = f"Capa {layer}"
+
+            self._mission_layer_label.config(
+                text=f"{layer_text}\n({zmin}-{zmax} cm)",
+                bg=bg_color
+            )
+
+        # Redibujar mapa para mostrar exclusiones de esa capa
+        self._draw_mission_map()
+
     def _draw_mission_map(self):
         """Dibuja el mapa de misiones."""
         if not hasattr(self, '_mission_canvas') or not self._mission_canvas:
@@ -3728,14 +3764,36 @@ class MiniRemoteApp:
             self._mission_canvas.create_rectangle(x1, y1, x2, y2,
                                                    outline="#28a745", fill="", width=3, dash=(10, 5))
 
+        # Obtener capa de trabajo para colorear obstáculos
+        layer_var = getattr(self, '_mission_draw_layer_var', None)
+        current_layer = 0
+        if layer_var:
+            layer_str = layer_var.get()
+            current_layer = int(layer_str) if layer_str.isdigit() else 0
+        show_all = (current_layer == 0)
+
+        # Colores para obstáculos (igual que Abrir mapa)
+        COLOR_IN_LAYER = "#ff0000"      # Rojo - obstáculo en capa actual
+        COLOR_OTHER_LAYER = "#ffcccc"   # Rojo claro - obstáculo en otra capa
+        WIDTH_IN_LAYER = 3
+        WIDTH_OTHER_LAYER = 1
+
         # Dibujar obstáculos
         for i, obs in enumerate(self._mission_exclusions):
             obs_type = obs.get('type', 'circle')
+
+            # Determinar si está en la capa de trabajo
+            excl_layers = self._get_mission_exclusion_layers(obs)
+            in_current_layer = show_all or (current_layer in excl_layers)
+
             # Color diferente si está seleccionado
             is_selected = (i == self._selected_obs_idx)
-            outline_color = "#ffc107" if is_selected else "#dc3545"  # Amarillo si seleccionado
-            fill_color = "#fff3cd" if is_selected else "#ffcccc"
-            line_width = 4 if is_selected else 2
+            if is_selected:
+                outline_color = "#00ff00"  # Verde para seleccionado
+                line_width = 4
+            else:
+                outline_color = COLOR_IN_LAYER if in_current_layer else COLOR_OTHER_LAYER
+                line_width = WIDTH_IN_LAYER if in_current_layer else WIDTH_OTHER_LAYER
 
             # Calcular centro para el texto de capa
             text_cx, text_cy = 0, 0
@@ -3744,13 +3802,13 @@ class MiniRemoteApp:
                 cx, cy = self._mission_world_to_canvas(obs['cx'], obs['cy'])
                 r = obs['r'] * PX_PER_CM
                 self._mission_canvas.create_oval(cx - r, cy - r, cx + r, cy + r,
-                                                  outline=outline_color, fill=fill_color, width=line_width)
+                                                  outline=outline_color, fill="", width=line_width)
                 text_cx, text_cy = cx, cy
             elif obs_type == 'rect':
                 x1, y1 = self._mission_world_to_canvas(obs['x1'], obs['y1'])
                 x2, y2 = self._mission_world_to_canvas(obs['x2'], obs['y2'])
                 self._mission_canvas.create_rectangle(x1, y1, x2, y2,
-                                                       outline=outline_color, fill=fill_color, width=line_width)
+                                                       outline=outline_color, fill="", width=line_width)
                 text_cx, text_cy = (x1 + x2) / 2, (y1 + y2) / 2
             elif obs_type == 'poly':
                 points = []
@@ -3759,7 +3817,7 @@ class MiniRemoteApp:
                     points.extend([cx, cy])
                 if len(points) >= 6:
                     self._mission_canvas.create_polygon(points, outline=outline_color,
-                                                         fill=fill_color, width=line_width)
+                                                         fill="", width=line_width)
                     # Centroide del polígono
                     pts = obs['points']
                     centroid_x = sum(p[0] for p in pts) / len(pts)
@@ -3767,7 +3825,6 @@ class MiniRemoteApp:
                     text_cx, text_cy = self._mission_world_to_canvas(centroid_x, centroid_y)
 
             # Mostrar en qué capas está el obstáculo
-            excl_layers = self._get_mission_exclusion_layers(obs)
             if excl_layers:
                 layers_text = "C" + ",".join(str(l) for l in excl_layers)
                 self._mission_canvas.create_text(text_cx, text_cy, text=layers_text,
@@ -4204,6 +4261,64 @@ class MiniRemoteApp:
         if self._mission_exclusions:
             self._mission_exclusions.pop()
             self._draw_mission_map()
+
+    def _save_mission_template(self):
+        """Guarda la plantilla del Editor de Misiones (obstáculos, waypoints, geofence)."""
+        path = filedialog.asksaveasfilename(defaultextension=".json", filetypes=[("JSON", "*.json")])
+        if not path:
+            return
+
+        data = {
+            "type": "mission",  # Identificador para distinguir del otro tipo
+            "exclusions": self._mission_exclusions,
+            "waypoints": self._mission_waypoints,
+            "geofence": self._mission_geofence,
+        }
+
+        try:
+            with open(path, "w") as f:
+                json.dump(data, f, indent=2)
+            messagebox.showinfo("Plantilla Misión", "Guardada correctamente.")
+        except Exception as e:
+            messagebox.showerror("Plantilla Misión", f"Error guardando: {e}")
+
+    def _load_mission_template(self):
+        """Carga la plantilla del Editor de Misiones."""
+        path = filedialog.askopenfilename(filetypes=[("JSON", "*.json")])
+        if not path:
+            return
+
+        try:
+            with open(path, "r") as f:
+                data = json.load(f)
+
+            # Verificar que sea una plantilla de misión
+            if data.get("type") != "mission":
+                messagebox.showwarning("Plantilla Misión",
+                    "Este archivo es una plantilla de 'Abrir mapa', no de 'Editor de misiones'.")
+                return
+
+            self._mission_exclusions = data.get("exclusions", [])
+            self._mission_waypoints = data.get("waypoints", [])
+            self._mission_geofence = data.get("geofence")
+
+            # Actualizar UI
+            try:
+                if hasattr(self, '_mission_canvas') and self._mission_canvas and self._mission_canvas.winfo_exists():
+                    self._draw_mission_map()
+                    self._mission_canvas.update_idletasks()
+            except:
+                pass
+
+            try:
+                self._update_wp_listbox()
+            except:
+                pass
+
+            messagebox.showinfo("Plantilla Misión", "Cargada correctamente.")
+
+        except Exception as e:
+            messagebox.showerror("Plantilla Misión", f"Error cargando: {e}")
 
     def _mission_apply_geofence(self):
         """Aplica el geofence configurado."""

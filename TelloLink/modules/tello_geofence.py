@@ -1032,9 +1032,9 @@ def get_exclusion_layers(self, exclusion: Dict) -> List[int]:
         layer_zmin = layer["z_min"]
         layer_zmax = layer["z_max"]
 
-        # Hay solapamiento si los rangos se intersectan
-        # No hay solapamiento si: excl_zmax < layer_zmin OR excl_zmin > layer_zmax
-        if not (excl_zmax < layer_zmin or excl_zmin > layer_zmax):
+        # Hay solapamiento si los rangos se intersectan (límites exclusivos)
+        # Un obstáculo en la frontera exacta (ej: zmax=60 con layer zmin=60) NO solapa
+        if excl_zmin < layer_zmax and excl_zmax > layer_zmin:
             result.append(i + 1)
 
     return result if result else [1, 2, 3]  # Por defecto todas si algo falla
@@ -1083,4 +1083,3 @@ def check_layer_change(self) -> Optional[int]:
         return current
 
     return None
-
