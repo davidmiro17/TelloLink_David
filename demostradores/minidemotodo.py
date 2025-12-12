@@ -3165,18 +3165,6 @@ class MiniRemoteApp:
         self._mission_canvas.pack(side="left", padx=10, pady=10)
         self._mission_canvas.bind("<Button-1>", self._on_mission_canvas_click)
 
-        # Indicador de capa actual (esquina superior izquierda del canvas)
-        self._mission_layer_label = tk.Label(
-            self._mission_win,
-            text="Capa 1\n(0-60 cm)",
-            font=("Arial", 14, "bold"),
-            bg="#28a745",  # Verde - capa 1 por defecto
-            fg="#ffffff",
-            padx=10,
-            pady=5
-        )
-        self._mission_layer_label.place(x=30, y=30)
-
         # Panel lateral con scroll
         side_container = tk.Frame(self._mission_win, bd=1, relief="groove")
         side_container.pack(side="right", fill="y", padx=10, pady=10)
@@ -3254,8 +3242,10 @@ class MiniRemoteApp:
                                  ("3", layer_colors[2], "C3"), ("all", "#6c757d", "ALL")]:
             tk.Radiobutton(layer_row, text=txt, variable=self._mission_draw_layer_var, value=val,
                            bg=color, fg="white", selectcolor=color, activebackground=color,
-                           indicatoron=0, width=4, font=("Arial", 8, "bold"),
-                           command=self._on_mission_layer_change).pack(side="left", padx=1)
+                           indicatoron=0, width=4, font=("Arial", 8, "bold")).pack(side="left", padx=1)
+
+        # Inicializar indicador con la capa de trabajo seleccionada
+        self._on_mission_layer_change()
 
         # Botones para polígonos y eliminar
         obs_btn_row = tk.Frame(tools_content, bg=BG_CARD)
@@ -3677,6 +3667,18 @@ class MiniRemoteApp:
         tk.Button(exec_btns, text="⏹ Abortar", command=self._abort_mission,
                   bg="#dc3545", fg="white", font=("Arial", 10, "bold"), bd=0).pack(side="left", fill="x", expand=True, padx=2)
 
+        # Crear label de capa AL FINAL de todo
+        self._mission_layer_label = tk.Label(
+            self._mission_win,
+            text="Capa 1\n(0-60 cm)",
+            font=("Arial", 12, "bold"),
+            bg="#28a745",
+            fg="white",
+            padx=8,
+            pady=4
+        )
+        self._mission_layer_label.place(x=20, y=20)
+
         # Dibujar mapa inicial
         self._draw_mission_map()
 
@@ -3700,34 +3702,13 @@ class MiniRemoteApp:
 
     def _on_mission_layer_change(self, *args):
         """Actualiza el indicador de capa cuando cambia la selección en Editor de Misiones."""
-        if not self._mission_draw_layer_var:
-            return
-
-        layer = self._mission_draw_layer_var.get()
-        zmin, zmax = self._get_layer_z_range(layer)
-
-        # Actualizar el indicador grande de la esquina
-        if self._mission_layer_label:
-            # Colores consistentes con el tema
-            colors = {
-                "1": "#28a745",  # Verde - capa 1
-                "2": "#fd7e14",  # Naranja - capa 2
-                "3": "#007bff",  # Azul - capa 3
-                "all": "#6c757d",  # Gris - todas
-            }
-            bg_color = colors.get(layer, "#333333")
-
-            if layer == "all":
-                layer_text = "Todas las capas"
-            else:
-                layer_text = f"Capa {layer}"
-
-            self._mission_layer_label.config(
-                text=f"{layer_text}\n({zmin}-{zmax} cm)",
-                bg=bg_color
-            )
-
-        # Redibujar mapa para mostrar exclusiones de esa capa
+        if self._mission_draw_layer_var and self._mission_layer_label:
+            layer = self._mission_draw_layer_var.get()
+            zmin, zmax = self._get_layer_z_range(layer)
+            colors = {"1": "#28a745", "2": "#fd7e14", "3": "#007bff", "all": "#6c757d"}
+            bg = colors.get(layer, "#333")
+            txt = "Todas las capas" if layer == "all" else f"Capa {layer}"
+            self._mission_layer_label.config(text=f"{txt}\n({zmin}-{zmax} cm)", bg=bg)
         self._draw_mission_map()
 
     def _draw_mission_map(self):
