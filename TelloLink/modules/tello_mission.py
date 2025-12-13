@@ -156,14 +156,9 @@ def _mission_worker(self,
             if on_action:
                 try:
                     on_action(idx - 1, 'photo')
-                except Exception:
-                    pass
-            try:
-                if hasattr(self, 'photo'):
-                    self.photo()
-                    time.sleep(0.3)  # Pequeña pausa después de la foto
-            except Exception as e:
-                print(f"[mission] Error tomando foto: {e}")
+                    time.sleep(0.5)  # Pequeña pausa para que la foto se complete
+                except Exception as e:
+                    print(f"[mission] Error en callback de foto: {e}")
 
         # Acción: VIDEO
         if original_wp.get('video', False):

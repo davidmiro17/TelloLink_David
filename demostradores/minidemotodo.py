@@ -137,6 +137,7 @@ class MiniRemoteApp:
         self._rec_path = None
         self._rec_fps = 30
         self._rec_size = (640, 480)
+        self._rec_frame_count = 0
         # FPV externo (ventana OpenCV)
         self._fpv_ext_running = False
         self._fpv_ext_thread = None
@@ -843,11 +844,14 @@ class MiniRemoteApp:
                 self.fpv_label.image = imgtk
                 if self._rec_running:
                     if self._rec_writer is None:
+                        print(f"[_fpv_loop] Writer es None, creando con tamaño {target_w}x{target_h}")
                         self._start_writer((target_w, target_h))
                     try:
-                        self._rec_writer.write(canvas_base)
-                    except Exception:
-                        pass
+                        if self._rec_writer is not None:
+                            self._rec_writer.write(canvas_base)
+                            self._rec_frame_count += 1
+                    except Exception as e:
+                        print(f"[_fpv_loop] ERROR escribiendo frame: {e}")
                     now = time.time()
                     if now - last_badge_toggle > 0.5:
                         rec_on = not rec_on
@@ -886,14 +890,27 @@ class MiniRemoteApp:
 
     def _start_writer(self, size_wh):
         self._rec_size = size_wh
-        fourcc = cv2. VideoWriter_fourcc(*"mp4v")
+        fourcc = cv2.VideoWriter_fourcc(*"XVID")
         self._rec_writer = cv2.VideoWriter(self._rec_path, fourcc, self._rec_fps, self._rec_size)
+        print(f"[_start_writer] VideoWriter creado: path={self._rec_path}, size={size_wh}, fps={self._rec_fps}")
 
     def _start_recording(self):
         # Usar gestor de sesiones para obtener ruta
         self._rec_path = self._session_manager.get_video_path()
         self._rec_running = True
         self._rec_writer = None
+        self._rec_frame_count = 0
+
+        # Inicializar el writer inmediatamente si ya hay frames disponibles
+        with self._frame_lock:
+            frame = self._last_bgr
+        if frame is not None:
+            h, w = frame.shape[:2]
+            print(f"[_start_recording] Inicializando writer con tamaño {w}x{h}")
+            self._start_writer((w, h))
+        else:
+            print("[_start_recording] WARNING: No hay frame disponible para iniciar writer")
+
         self._hud_show("Grabando...", 1.5)
 
     def _stop_recording(self):
@@ -901,9 +918,14 @@ class MiniRemoteApp:
             self._rec_running = False
             try:
                 if self._rec_writer is not None:
+                    print(f"[_stop_recording] Liberando writer, guardando video en {self._rec_path}")
+                    print(f"[_stop_recording] Total frames escritos: {self._rec_frame_count}")
                     self._rec_writer.release()
-            except Exception:
-                pass
+                    print(f"[_stop_recording] Video guardado correctamente")
+                else:
+                    print("[_stop_recording] WARNING: No había writer para liberar")
+            except Exception as e:
+                print(f"[_stop_recording] ERROR liberando writer: {e}")
             self._rec_writer = None
             self._hud_show("Video guardado", 1.5)
 
@@ -4571,6 +4593,11 @@ class MiniRemoteApp:
             waypoints_to_execute = self._mission_waypoints
 
         print(f"[DEBUG] Ejecutando misión con {len(waypoints_to_execute)} waypoints")
+        print("[DEBUG] Waypoints a ejecutar:")
+        for i, wp in enumerate(waypoints_to_execute):
+            is_intermediate = wp.get('_intermediate', False)
+            marker = " (INTERMEDIO)" if is_intermediate else ""
+            print(f"  [{i}] x={wp.get('x')}, y={wp.get('y')}, z={wp.get('z')}{marker}")
 
         self._mission_running = True
         self._mission_status_label.configure(text="Estado: Ejecutando...", fg="#ffc107")
@@ -4592,16 +4619,71 @@ class MiniRemoteApp:
                 text=f"WP{idx + 1}: {text}", fg="#17a2b8"))
 
             # Manejar acciones específicas
-            if action_name == 'video':
+            if action_name == 'photo':
+                # Tomar foto inmediatamente
+                print("[on_action] Ejecutando take_snapshot()")
+                try:
+                    # Asegurar que el stream está activo
+                    if not self._fpv_running:
+                        print("[on_action] Stream no activo, iniciando FPV...")
+                        self.start_fpv()
+                        import time
+                        # Esperar a que el stream esté listo (máximo 5 segundos)
+                        print("[on_action] Esperando a que el stream esté listo...")
+                        for i in range(50):
+                            if self._last_bgr is not None:
+                                print(f"[on_action] Stream listo después de {i*0.1:.1f}s")
+                                break
+                            time.sleep(0.1)
+                        else:
+                            print("[on_action] WARNING: Timeout esperando stream")
+
+                    self.take_snapshot()
+                    print("[on_action] Foto guardada correctamente")
+                except Exception as e:
+                    print(f"[on_action] Error tomando foto: {e}")
+                    import traceback
+                    traceback.print_exc()
+            elif action_name == 'video':
                 # Iniciar grabación inmediatamente
-                self._mission_win.after(0, self._start_recording)
+                print(f"[on_action] Iniciando grabación")
+                try:
+                    # Asegurar que el stream está activo
+                    if not self._fpv_running:
+                        print("[on_action] Stream no activo, iniciando FPV...")
+                        self.start_fpv()
+                        import time
+                        # Esperar a que el stream esté listo (máximo 5 segundos)
+                        print("[on_action] Esperando a que el stream esté listo...")
+                        for i in range(50):
+                            if self._last_bgr is not None:
+                                print(f"[on_action] Stream listo después de {i*0.1:.1f}s")
+                                break
+                            time.sleep(0.1)
+                        else:
+                            print("[on_action] WARNING: Timeout esperando stream")
+
+                    self._start_recording()
+                    print("[on_action] Grabación iniciada correctamente")
+                except Exception as e:
+                    print(f"[on_action] Error iniciando grabación: {e}")
+                    import traceback
+                    traceback.print_exc()
                 # El módulo esperará la duración, luego detenemos
+                # Programar detención usando threading.Timer en vez de tkinter.after
                 wp = waypoints_to_execute[idx] if idx < len(waypoints_to_execute) else {}
                 duration = wp.get('video_duration', 5)
-                self._mission_win.after(int(duration * 1000), self._stop_recording)
-            elif action_name == 'photo':
-                # Tomar foto desde la interfaz si es necesario
-                pass  # El módulo ya llama a self.photo()
+                import threading
+                def stop_video():
+                    try:
+                        print(f"[on_action] Deteniendo grabación después de {duration}s")
+                        self._stop_recording()
+                        print("[on_action] Grabación detenida correctamente")
+                    except Exception as e:
+                        print(f"[on_action] Error deteniendo grabación: {e}")
+                        import traceback
+                        traceback.print_exc()
+                threading.Timer(duration, stop_video).start()
 
         def on_finish():
             """Callback al terminar la misión."""

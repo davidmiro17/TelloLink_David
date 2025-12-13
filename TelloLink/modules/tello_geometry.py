@@ -288,13 +288,24 @@ def _get_obstacle_avoidance_points(obs: Dict[str, Any], margin: float = _SAFETY_
 
     elif obs_type == 'rect':
         x1, y1, x2, y2 = obs['x1'], obs['y1'], obs['x2'], obs['y2']
-        # 4 esquinas con margen
-        return [
-            (x1 - margin, y1 - margin),  # Inferior izquierda
-            (x2 + margin, y1 - margin),  # Inferior derecha
-            (x2 + margin, y2 + margin),  # Superior derecha
-            (x1 - margin, y2 + margin),  # Superior izquierda
-        ]
+        # Generar múltiples puntos alrededor del rectángulo con diferentes distancias
+        points = []
+        # Margen más grande para tener más opciones
+        margins = [margin, margin * 2, margin * 3]
+        for m in margins:
+            # 4 esquinas
+            points.append((x1 - m, y1 - m))  # Inferior izquierda
+            points.append((x2 + m, y1 - m))  # Inferior derecha
+            points.append((x2 + m, y2 + m))  # Superior derecha
+            points.append((x1 - m, y2 + m))  # Superior izquierda
+            # Puntos en los centros de cada lado
+            mid_x = (x1 + x2) / 2
+            mid_y = (y1 + y2) / 2
+            points.append((mid_x, y1 - m))  # Centro inferior
+            points.append((mid_x, y2 + m))  # Centro superior
+            points.append((x1 - m, mid_y))  # Centro izquierdo
+            points.append((x2 + m, mid_y))  # Centro derecho
+        return points
 
     elif obs_type == 'poly':
         points = obs['points']
@@ -373,27 +384,36 @@ def plan_path_around_obstacles(start_x: float, start_y: float,
         El primer punto es el inicio, el último es el destino.
         Si no se puede encontrar ruta, devuelve camino directo.
     """
+    print(f"[plan_path] Inicio: ({start_x}, {start_y}) -> ({end_x}, {end_y}), depth={max_depth}")
+
     # Caso base: camino directo está libre
-    if _path_is_clear(start_x, start_y, end_x, end_y, obstacles):
+    is_clear = _path_is_clear(start_x, start_y, end_x, end_y, obstacles)
+    print(f"[plan_path] Camino directo libre: {is_clear}")
+    if is_clear:
         return [(start_x, start_y), (end_x, end_y)]
 
     # Caso base: máxima profundidad alcanzada
     if max_depth <= 0:
+        print("[plan_path] Max depth alcanzado, retornando camino directo")
         return [(start_x, start_y), (end_x, end_y)]
 
     # Encontrar el obstáculo que bloquea
     blocking_obs = _find_blocking_obstacle(start_x, start_y, end_x, end_y, obstacles)
+    print(f"[plan_path] Obstáculo bloqueante: {blocking_obs}")
     if blocking_obs is None:
         return [(start_x, start_y), (end_x, end_y)]
 
     # Obtener puntos candidatos para rodear el obstáculo
     avoidance_points = _get_obstacle_avoidance_points(blocking_obs)
+    print(f"[plan_path] Puntos candidatos: {len(avoidance_points)} -> {avoidance_points}")
 
     # Filtrar puntos que estén dentro de otros obstáculos
     safe_points = [(px, py) for px, py in avoidance_points
                    if _point_is_safe(px, py, obstacles)]
+    print(f"[plan_path] Puntos seguros: {len(safe_points)} -> {safe_points}")
 
     if not safe_points:
+        print("[plan_path] No hay puntos seguros, retornando camino directo")
         return [(start_x, start_y), (end_x, end_y)]
 
     # Buscar el mejor punto intermedio
@@ -402,6 +422,10 @@ def plan_path_around_obstacles(start_x: float, start_y: float,
     best_score = float('inf')
 
     for px, py in safe_points:
+        # NO elegir el punto desde el que ya estamos (evita bucles infinitos)
+        if abs(px - start_x) < 2 and abs(py - start_y) < 2:
+            continue
+
         # Solo considerar puntos alcanzables desde el inicio
         if not _path_is_clear(start_x, start_y, px, py, obstacles):
             continue
@@ -418,6 +442,10 @@ def plan_path_around_obstacles(start_x: float, start_y: float,
     # Si no encontramos punto alcanzable, probar todos
     if best_point is None:
         for px, py in safe_points:
+            # NO elegir el punto desde el que ya estamos (evita bucles infinitos)
+            if abs(px - start_x) < 2 and abs(py - start_y) < 2:
+                continue
+
             dist_to_point = _distance(start_x, start_y, px, py)
             dist_to_end = _distance(px, py, end_x, end_y)
             total_dist = dist_to_point + dist_to_end
@@ -492,9 +520,12 @@ def plan_mission_with_avoidance(waypoints: List[Dict[str, Any]],
         if i < len(waypoints) - 1:
             next_wp = waypoints[i + 1]
             path = plan_path_around_obstacles(wp['x'], wp['y'], next_wp['x'], next_wp['y'], obstacles)
+            print(f"[path_planning] WP{i+1} a WP{i+2}: path retornó {len(path)} puntos: {path}")
 
             # Añadir puntos intermedios (excluir inicio y fin)
-            for px, py in path[1:-1]:
+            intermediate_points = path[1:-1]
+            print(f"[path_planning] Puntos intermedios a agregar: {intermediate_points}")
+            for px, py in intermediate_points:
                 result.append({
                     'x': px, 'y': py, 'z': None,
                     '_intermediate': True
