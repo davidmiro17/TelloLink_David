@@ -228,20 +228,38 @@ def _mission_worker(self,
     # Return to home: volver al origen (0,0) antes de aterrizar
     if return_home and not getattr(self, "_mission_abort", False):
         pose = getattr(self, "pose", None)
-        if pose is not None:
-            # Calcular desplazamiento para volver a (0,0)
-            dx_home = -float(getattr(pose, "x_cm", 0.0) or 0.0)
-            dy_home = -float(getattr(pose, "y_cm", 0.0) or 0.0)
+        if pose is None:
+            print("[mission] WARNING: Pose no disponible, no se puede ejecutar RTH")
+            print("[mission] El dron aterrizará en su posición actual")
+        else:
+            # Obtener posición actual
+            current_x = getattr(pose, "x_cm", None)
+            current_y = getattr(pose, "y_cm", None)
 
-            # Solo volver si estamos lejos del origen
-            if abs(dx_home) > 10 or abs(dy_home) > 10:
-                print(f"[mission] Volviendo a casa (0, 0)...")
-                try:
-                    # Siempre usar face_target=True para volver a casa mirando hacia adelante
-                    self.goto_rel(dx_cm=dx_home, dy_cm=dy_home, dz_cm=0,
-                                 face_target=True, blocking=True)
-                except Exception as e:
-                    print(f"[mission] Error volviendo a casa: {e}")
+            # Verificar que tenemos valores válidos de posición
+            if current_x is None or current_y is None:
+                print("[mission] WARNING: Posición del dron desconocida (x o y es None)")
+                print("[mission] El dron aterrizará en su posición actual")
+            else:
+                # Calcular desplazamiento para volver a (0,0)
+                dx_home = -float(current_x or 0.0)
+                dy_home = -float(current_y or 0.0)
+
+                print(f"[mission] Posición actual: ({current_x:.1f}, {current_y:.1f})")
+                print(f"[mission] Desplazamiento a casa: dx={dx_home:.1f}, dy={dy_home:.1f}")
+
+                # Solo volver si estamos lejos del origen (más de 10cm)
+                if abs(dx_home) > 10 or abs(dy_home) > 10:
+                    print(f"[mission] Volviendo a casa (0, 0)...")
+                    try:
+                        # Siempre usar face_target=True para volver a casa mirando hacia adelante
+                        self.goto_rel(dx_cm=dx_home, dy_cm=dy_home, dz_cm=0,
+                                     face_target=True, blocking=True)
+                        print("[mission] RTH completado")
+                    except Exception as e:
+                        print(f"[mission] Error volviendo a casa: {e}")
+                else:
+                    print(f"[mission] Ya estamos cerca del origen ({abs(dx_home):.1f}, {abs(dy_home):.1f}), no es necesario RTH")
 
     # Final de misión
     if do_land:

@@ -840,31 +840,18 @@ class MiniRemoteApp:
                 rgb = cv2.cvtColor(canvas_preview, cv2.COLOR_BGR2RGB)
                 img = Image.fromarray(rgb)
                 imgtk = ImageTk.PhotoImage(image=img)
-
-                # Solo actualizar UI si fpv_label existe
-                if self.fpv_label is not None:
-                    self.fpv_label.configure(image=imgtk, text="")
-                    self.fpv_label.image = imgtk
+                self.fpv_label.configure(image=imgtk, text="")
+                self.fpv_label.image = imgtk
                 if self._rec_running:
-                    # Log cada 30 frames (1 segundo aprox)
-                    if self._rec_frame_count % 30 == 0:
-                        print(f"[_fpv_loop] Grabando... frames={self._rec_frame_count}, writer={'OK' if self._rec_writer else 'None'}")
-
                     if self._rec_writer is None:
                         print(f"[_fpv_loop] Writer es None, creando con tamaño {target_w}x{target_h}")
                         self._start_writer((target_w, target_h))
-
-                    if self._rec_writer is not None:
-                        try:
+                    try:
+                        if self._rec_writer is not None:
                             self._rec_writer.write(canvas_base)
                             self._rec_frame_count += 1
-                            if self._rec_frame_count == 1:
-                                print(f"[_fpv_loop] Primer frame escrito correctamente")
-                        except Exception as e:
-                            print(f"[_fpv_loop] ERROR escribiendo frame {self._rec_frame_count}: {e}")
-                    else:
-                        if self._rec_frame_count == 0:
-                            print(f"[_fpv_loop] WARNING: Writer es None, no se pueden escribir frames")
+                    except Exception as e:
+                        print(f"[_fpv_loop] ERROR escribiendo frame: {e}")
                     now = time.time()
                     if now - last_badge_toggle > 0.5:
                         rec_on = not rec_on
@@ -878,9 +865,8 @@ class MiniRemoteApp:
             pass
 
     def _set_fpv_text(self, text):
-        if self.fpv_label is not None:
-            self.fpv_label.configure(text=text, image="")
-            self.fpv_label.image = None
+        self.fpv_label.configure(text=text, image="")
+        self.fpv_label.image = None
 
     def take_snapshot(self):
         with self._frame_lock:
@@ -904,35 +890,9 @@ class MiniRemoteApp:
 
     def _start_writer(self, size_wh):
         self._rec_size = size_wh
-
-        # Asegurar que el path termina en .avi
-        if self._rec_path.endswith('.mp4'):
-            self._rec_path = self._rec_path[:-4] + '.avi'
-
-        # Probar con diferentes códecs hasta que uno funcione
-        codecs_to_try = [
-            ('XVID', 'XVID'),
-            ('MJPG', 'MJPEG'),
-            ('mp4v', 'MP4V'),
-        ]
-
-        for codec_code, codec_name in codecs_to_try:
-            try:
-                fourcc = cv2.VideoWriter_fourcc(*codec_code)
-                self._rec_writer = cv2.VideoWriter(self._rec_path, fourcc, self._rec_fps, self._rec_size)
-
-                if self._rec_writer is not None and self._rec_writer.isOpened():
-                    print(f"[_start_writer] VideoWriter abierto con {codec_name}: path={self._rec_path}, size={size_wh}, fps={self._rec_fps}")
-                    return
-                else:
-                    if self._rec_writer is not None:
-                        self._rec_writer.release()
-                    self._rec_writer = None
-            except Exception as e:
-                print(f"[_start_writer] Fallo con códec {codec_name}: {e}")
-                self._rec_writer = None
-
-        print(f"[_start_writer] ERROR: No se pudo abrir VideoWriter con ningún códec")
+        fourcc = cv2.VideoWriter_fourcc(*"XVID")
+        self._rec_writer = cv2.VideoWriter(self._rec_path, fourcc, self._rec_fps, self._rec_size)
+        print(f"[_start_writer] VideoWriter creado: path={self._rec_path}, size={size_wh}, fps={self._rec_fps}")
 
     def _start_recording(self):
         # Usar gestor de sesiones para obtener ruta
@@ -941,35 +901,78 @@ class MiniRemoteApp:
         self._rec_writer = None
         self._rec_frame_count = 0
 
-        print(f"[_start_recording] FPV running: {self._fpv_running}")
+        # Verificar que el FPV está activo antes de iniciar grabación
+        if not self._fpv_running:
+            print("[_start_recording] WARNING: FPV no está corriendo, iniciando...")
+            self.start_fpv()
+            # Esperar un poco a que se inicie
+            import time as time_mod
+            time_mod.sleep(0.3)
 
-        # Inicializar el writer inmediatamente si ya hay frames disponibles
-        with self._frame_lock:
-            frame = self._last_bgr
-        if frame is not None:
-            h, w = frame.shape[:2]
-            print(f"[_start_recording] Inicializando writer con tamaño {w}x{h}")
-            self._start_writer((w, h))
+        # Intentar inicializar el writer con reintentos
+        max_retries = 10
+        for attempt in range(max_retries):
+            with self._frame_lock:
+                frame = self._last_bgr
+            if frame is not None:
+                h, w = frame.shape[:2]
+                print(f"[_start_recording] Inicializando writer con tamaño {w}x{h} (intento {attempt+1})")
+                self._start_writer((w, h))
+                break
+            import time as time_mod
+            time_mod.sleep(0.1)
         else:
-            print("[_start_recording] WARNING: No hay frame disponible para iniciar writer")
+            print("[_start_recording] WARNING: No hay frame disponible después de varios intentos")
+            print("[_start_recording] El writer se creará cuando llegue el primer frame")
 
         self._hud_show("Grabando...", 1.5)
 
     def _stop_recording(self):
         if self._rec_running:
             self._rec_running = False
+            video_path = self._rec_path
+            frames_recorded = self._rec_frame_count
+
             try:
                 if self._rec_writer is not None:
-                    print(f"[_stop_recording] Liberando writer, guardando video en {self._rec_path}")
-                    print(f"[_stop_recording] Total frames escritos: {self._rec_frame_count}")
+                    print(f"[_stop_recording] Liberando writer, guardando video en {video_path}")
+                    print(f"[_stop_recording] Total frames escritos: {frames_recorded}")
                     self._rec_writer.release()
-                    print(f"[_stop_recording] Video guardado correctamente")
+
+                    # Verificar que el video no está vacío
+                    import os
+                    if os.path.exists(video_path):
+                        file_size = os.path.getsize(video_path)
+                        if file_size < 1000:  # Menos de 1KB = video vacío/corrupto
+                            print(f"[_stop_recording] ⚠️ VIDEO VACÍO detectado ({file_size} bytes)")
+                            print(f"[_stop_recording] Eliminando archivo vacío: {video_path}")
+                            try:
+                                os.remove(video_path)
+                            except Exception:
+                                pass
+                            self._hud_show("Error: Video vacío", 2.0)
+                        else:
+                            print(f"[_stop_recording] Video guardado: {file_size/1024:.1f} KB, {frames_recorded} frames")
+                            self._hud_show("Video guardado", 1.5)
+                    else:
+                        print(f"[_stop_recording] WARNING: El archivo de video no existe")
+                        self._hud_show("Error grabación", 1.5)
                 else:
                     print("[_stop_recording] WARNING: No había writer para liberar")
+                    # Eliminar archivo vacío si existe
+                    import os
+                    if video_path and os.path.exists(video_path):
+                        try:
+                            os.remove(video_path)
+                            print(f"[_stop_recording] Archivo vacío eliminado: {video_path}")
+                        except Exception:
+                            pass
+                    self._hud_show("Error: Sin grabación", 1.5)
             except Exception as e:
                 print(f"[_stop_recording] ERROR liberando writer: {e}")
+                self._hud_show("Error grabación", 1.5)
+
             self._rec_writer = None
-            self._hud_show("Video guardado", 1.5)
 
     # FPV EXTERNO (cv2.imshow con VideoCapture compartido)
     def toggle_fpv_external(self):
@@ -4688,43 +4691,78 @@ class MiniRemoteApp:
                     traceback.print_exc()
             elif action_name == 'video':
                 # Iniciar grabación inmediatamente
-                print(f"[on_action] Iniciando grabación")
+                print(f"[on_action] Iniciando grabación de video")
+                import time as time_module
+                import threading
+
+                wp = waypoints_to_execute[idx] if idx < len(waypoints_to_execute) else {}
+                duration = float(wp.get('video_duration', 5) or 5)
+
                 try:
-                    # Asegurar que el stream está activo
+                    # PASO 1: Asegurar que el stream está activo
                     if not self._fpv_running:
                         print("[on_action] Stream no activo, iniciando FPV...")
                         self.start_fpv()
-                        import time
-                        # Esperar a que el stream esté listo (máximo 5 segundos)
-                        print("[on_action] Esperando a que el stream esté listo...")
-                        for i in range(50):
+
+                    # PASO 2: Esperar a que haya frames disponibles (máximo 5 segundos)
+                    print("[on_action] Esperando a que el stream esté listo...")
+                    stream_ready = False
+                    for i in range(50):
+                        with self._frame_lock:
                             if self._last_bgr is not None:
+                                stream_ready = True
                                 print(f"[on_action] Stream listo después de {i*0.1:.1f}s")
                                 break
-                            time.sleep(0.1)
-                        else:
-                            print("[on_action] WARNING: Timeout esperando stream")
+                        time_module.sleep(0.1)
 
+                    if not stream_ready:
+                        print("[on_action] ERROR: No hay frames de video disponibles")
+                        print("[on_action] El video quedará vacío - verifica la conexión del dron")
+
+                    # PASO 3: Iniciar la grabación
                     self._start_recording()
-                    print("[on_action] Grabación iniciada correctamente")
+
+                    # PASO 4: Esperar a que el writer esté creado y grabando
+                    print("[on_action] Esperando a que el writer esté listo...")
+                    writer_ready = False
+                    for i in range(30):  # Máximo 3 segundos
+                        if self._rec_writer is not None and self._rec_frame_count > 0:
+                            writer_ready = True
+                            print(f"[on_action] Writer listo, frames grabados: {self._rec_frame_count}")
+                            break
+                        time_module.sleep(0.1)
+
+                    if not writer_ready:
+                        print(f"[on_action] WARNING: Writer no confirmado (writer={self._rec_writer is not None}, frames={self._rec_frame_count})")
+
+                    print(f"[on_action] Grabación iniciada, durará {duration}s")
+
                 except Exception as e:
                     print(f"[on_action] Error iniciando grabación: {e}")
                     import traceback
                     traceback.print_exc()
-                # El módulo esperará la duración, luego detenemos
-                # Programar detención usando threading.Timer en vez de tkinter.after
-                wp = waypoints_to_execute[idx] if idx < len(waypoints_to_execute) else {}
-                duration = wp.get('video_duration', 5)
-                import threading
+
+                # PASO 5: Programar detención con verificación de frames
                 def stop_video():
                     try:
+                        frames_before = getattr(self, '_rec_frame_count', 0)
                         print(f"[on_action] Deteniendo grabación después de {duration}s")
+                        print(f"[on_action] Total frames grabados: {frames_before}")
                         self._stop_recording()
-                        print("[on_action] Grabación detenida correctamente")
+
+                        if frames_before == 0:
+                            print("[on_action] ⚠️ ADVERTENCIA: El video tiene 0 frames")
+                            print("[on_action] Posibles causas:")
+                            print("[on_action]   - El stream de video del dron no estaba activo")
+                            print("[on_action]   - El FPV no estaba corriendo")
+                            print("[on_action]   - Problema de conexión con el dron")
+                        else:
+                            print(f"[on_action] Video guardado correctamente ({frames_before} frames)")
                     except Exception as e:
                         print(f"[on_action] Error deteniendo grabación: {e}")
                         import traceback
                         traceback.print_exc()
+
                 threading.Timer(duration, stop_video).start()
 
         def on_finish():
@@ -4746,8 +4784,30 @@ class MiniRemoteApp:
         # Iniciar el timer de actualización del mapa
         self._mission_win.after(100, update_map_timer)
 
-        # Si usamos path planning, return_home ya está incluido en los waypoints
-        use_return_home = return_home if waypoints_to_execute is self._mission_waypoints else False
+        # Determinar si usar return_home en el módulo de misión
+        # Si usamos path planning Y return_home estaba activado, el path planning
+        # ya añadió waypoints de vuelta a (0,0), así que no duplicamos
+        if waypoints_to_execute is not self._mission_waypoints and return_home:
+            # Path planning usado con return_home: verificar si termina en (0,0)
+            last_wp = waypoints_to_execute[-1] if waypoints_to_execute else None
+            if last_wp:
+                last_x = last_wp.get('x', 0)
+                last_y = last_wp.get('y', 0)
+                # Si el último waypoint ya es (0,0) o muy cerca, no hacer RTH
+                if abs(last_x) < 15 and abs(last_y) < 15:
+                    use_return_home = False
+                    print(f"[DEBUG] Path planning terminó en ({last_x}, {last_y}), RTH ya incluido")
+                else:
+                    # Path planning no terminó en origen, activar RTH
+                    use_return_home = True
+                    print(f"[DEBUG] Path planning terminó en ({last_x}, {last_y}), activando RTH")
+            else:
+                use_return_home = return_home
+        else:
+            # Sin path planning: usar el valor original
+            use_return_home = return_home
+
+        print(f"[DEBUG] use_return_home final: {use_return_home}")
 
         # Ejecutar misión (el módulo maneja todo: navegación, acciones, return_home)
         def run_in_thread():
