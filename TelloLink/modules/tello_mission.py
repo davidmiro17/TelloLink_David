@@ -67,6 +67,7 @@ def _mission_worker(self,
                     return_home: bool = False,
                     face_target: bool = False,
                     on_wp: Optional[Callable[[int, Dict[str, Any]], None]] = None,
+                    on_action: Optional[Callable[[int, str], None]] = None,
                     on_finish: Optional[Callable[[], None]] = None) -> None:
     #Flag de aborto
     setattr(self, "_mission_abort", False)
@@ -144,7 +145,81 @@ def _mission_worker(self,
             print(f"[mission] Error en goto_rel de WP{idx}: {e}")
             break
 
-        # Delay en el punto (con posible aborto)
+        # ═══════════════════════════════════════════════════════════════
+        # EJECUTAR ACCIONES DEL WAYPOINT
+        # ═══════════════════════════════════════════════════════════════
+        original_wp = waypoints[idx - 1]  # waypoints original (idx empieza en 1)
+
+        # Acción: FOTO
+        if original_wp.get('photo', False):
+            print(f"[mission] WP{idx}: Tomando foto 📷")
+            if on_action:
+                try:
+                    on_action(idx - 1, 'photo')
+                except Exception:
+                    pass
+            try:
+                if hasattr(self, 'photo'):
+                    self.photo()
+                    time.sleep(0.3)  # Pequeña pausa después de la foto
+            except Exception as e:
+                print(f"[mission] Error tomando foto: {e}")
+
+        # Acción: VIDEO
+        if original_wp.get('video', False):
+            video_duration = float(original_wp.get('video_duration', 5) or 5)
+            print(f"[mission] WP{idx}: Grabando video por {video_duration}s 🎥")
+            if on_action:
+                try:
+                    on_action(idx - 1, 'video')
+                except Exception:
+                    pass
+            # Esperar la duración del video (el callback on_action maneja start/stop)
+            t0 = time.time()
+            while time.time() - t0 < video_duration:
+                if getattr(self, "_mission_abort", False):
+                    print("[mission] Video interrumpido por aborto.")
+                    break
+                time.sleep(0.1)
+            if getattr(self, "_mission_abort", False):
+                break
+
+        # Acción: ROTATE (rotación adicional)
+        if original_wp.get('rotate', False):
+            rotate_deg = float(original_wp.get('rotate_deg', 90) or 90)
+            print(f"[mission] WP{idx}: Rotando {rotate_deg}° 🔄")
+            if on_action:
+                try:
+                    on_action(idx - 1, 'rotate')
+                except Exception:
+                    pass
+            try:
+                if hasattr(self, 'set_heading'):
+                    current_heading = getattr(self, 'heading_deg', 0)
+                    new_heading = current_heading + rotate_deg
+                    self.set_heading(new_heading, blocking=True)
+            except Exception as e:
+                print(f"[mission] Error rotando: {e}")
+
+        # Acción: WAIT (hover en el punto)
+        if original_wp.get('wait', False):
+            wait_sec = float(original_wp.get('wait_sec', 2) or 2)
+            print(f"[mission] WP{idx}: Esperando {wait_sec}s ⏱")
+            if on_action:
+                try:
+                    on_action(idx - 1, 'wait')
+                except Exception:
+                    pass
+            t0 = time.time()
+            while time.time() - t0 < wait_sec:
+                if getattr(self, "_mission_abort", False):
+                    print("[mission] Wait interrumpido por aborto.")
+                    break
+                time.sleep(0.1)
+            if getattr(self, "_mission_abort", False):
+                break
+
+        # Delay en el punto (con posible aborto) - delay original del waypoint
         if delay > 0:
             t0 = time.time()
             while time.time() - t0 < delay:
@@ -195,6 +270,7 @@ def run_mission(self,
                 face_target: bool = False,
                 blocking: bool = True,
                 on_wp: Optional[Callable[[int, Dict[str, Any]], None]] = None,
+                on_action: Optional[Callable[[int, str], None]] = None,
                 on_finish: Optional[Callable[[], None]] = None) -> None:
     """
     Ejecuta una misión de waypoints.
@@ -207,10 +283,11 @@ def run_mission(self,
                     (como un coche, en vez de ir marcha atrás)
         blocking: Si True, espera a que termine la misión
         on_wp: Callback llamado al llegar a cada waypoint
+        on_action: Callback llamado al ejecutar una acción (foto, video, rotate, wait)
         on_finish: Callback llamado al finalizar la misión
     """
     th = threading.Thread(target=_mission_worker,
-                          args=(self, waypoints, do_land, return_home, face_target, on_wp, on_finish),
+                          args=(self, waypoints, do_land, return_home, face_target, on_wp, on_action, on_finish),
                           daemon=True)
     th.start()
     if blocking:

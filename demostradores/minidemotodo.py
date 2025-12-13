@@ -1536,6 +1536,23 @@ class MiniRemoteApp:
 
                 self._layer_label.config(text=f"{layer_text}\n({zmin}-{zmax} cm)")
 
+            # Actualizar también el indicador de la ventana de misiones
+            if self._mission_layer_label and self._mission_draw_layer_var:
+                layer = self._mission_draw_layer_var.get()
+                if layer == "1":
+                    zmin, zmax = 0, c1
+                elif layer == "2":
+                    zmin, zmax = c1, c2
+                elif layer == "3":
+                    zmin, zmax = c2, c3
+                else:  # all
+                    zmin, zmax = 0, c3
+
+                colors = {"1": "#28a745", "2": "#fd7e14", "3": "#007bff", "all": "#6c757d"}
+                bg = colors.get(layer, "#333")
+                txt = "Todas las capas" if layer == "all" else f"Capa {layer}"
+                self._mission_layer_label.config(text=f"{txt}\n({zmin}-{zmax} cm)", bg=bg)
+
         # Capa 3 (arriba - azul) - techo
         layer3_frame = tk.Frame(layers_container, bg=layer_colors[2], bd=0)
         layer3_frame.pack(fill="x", padx=2, pady=1)
@@ -3405,6 +3422,23 @@ class MiniRemoteApp:
             self._mission_layer2_range_var.set(f"{c1} - {c2} cm")
             self._mission_layer3_range_var.set(f"{c2} - {c3} cm")
 
+            # Actualizar también el indicador de la esquina
+            if self._mission_layer_label and self._mission_draw_layer_var:
+                layer = self._mission_draw_layer_var.get()
+                if layer == "1":
+                    zmin, zmax = 0, c1
+                elif layer == "2":
+                    zmin, zmax = c1, c2
+                elif layer == "3":
+                    zmin, zmax = c2, c3
+                else:  # all
+                    zmin, zmax = 0, c3
+
+                colors = {"1": "#28a745", "2": "#fd7e14", "3": "#007bff", "all": "#6c757d"}
+                bg = colors.get(layer, "#333")
+                txt = "Todas las capas" if layer == "all" else f"Capa {layer}"
+                self._mission_layer_label.config(text=f"{txt}\n({zmin}-{zmax} cm)", bg=bg)
+
         def on_mc1_change(*args):
             c1 = self._layer1_max_var.get()
             c2 = self._layer2_max_var.get()
@@ -4502,28 +4536,41 @@ class MiniRemoteApp:
         return_home = self._mission_return_home_var.get() if hasattr(self, '_mission_return_home_var') else False
         auto_avoid = self._mission_auto_avoid_var.get() if hasattr(self, '_mission_auto_avoid_var') else True
 
+        # DEBUG: Mostrar información de validación
+        print(f"[DEBUG] Waypoints: {len(self._mission_waypoints)}")
+        print(f"[DEBUG] Obstáculos: {len(self._mission_exclusions)}")
+        print(f"[DEBUG] Return home: {return_home}")
+        print(f"[DEBUG] Auto avoid: {auto_avoid}")
+
         # Validar rutas contra obstáculos (usa módulo tello_geometry)
         valid, error = validate_mission_paths(self._mission_waypoints, self._mission_exclusions, return_home)
+        print(f"[DEBUG] Validación: valid={valid}, error={error}")
 
         # Si hay obstáculos y auto_avoid está activado, planificar ruta alternativa
         if not valid and auto_avoid and self._mission_exclusions:
+            print("[DEBUG] Ruta inválida, ejecutando path planning...")
             # Usar path planning para evitar obstáculos
             planned_wps = plan_mission_with_avoidance(
                 self._mission_waypoints, self._mission_exclusions, return_home
             )
             # Contar waypoints intermedios añadidos
             n_intermediate = sum(1 for wp in planned_wps if wp.get('_intermediate', False))
+            print(f"[DEBUG] Path planning completado: {len(planned_wps)} waypoints totales, {n_intermediate} intermedios")
             if n_intermediate > 0:
                 messagebox.showinfo("Path Planning",
                     f"Se han añadido {n_intermediate} waypoints intermedios\n"
                     f"para evitar obstáculos automáticamente.")
             waypoints_to_execute = planned_wps
         elif not valid:
+            print("[DEBUG] Ruta inválida y auto_avoid desactivado o sin obstáculos")
             messagebox.showerror("Ruta inválida",
                 f"⚠️ {error}\n\nReorganiza los waypoints o activa 'Evitar obstáculos automáticamente'.")
             return
         else:
+            print("[DEBUG] Ruta válida, usando waypoints originales")
             waypoints_to_execute = self._mission_waypoints
+
+        print(f"[DEBUG] Ejecutando misión con {len(waypoints_to_execute)} waypoints")
 
         self._mission_running = True
         self._mission_status_label.configure(text="Estado: Ejecutando...", fg="#ffc107")
@@ -4543,14 +4590,18 @@ class MiniRemoteApp:
             text = action_texts.get(action_name, action_name)
             self._mission_win.after(0, lambda: self._mission_status_label.configure(
                 text=f"WP{idx + 1}: {text}", fg="#17a2b8"))
-            # Manejar video con la grabación de la app
+
+            # Manejar acciones específicas
             if action_name == 'video':
-                wp = self._mission_waypoints[idx]
-                duration = wp.get('video_duration', 0)
-                if duration > 0:
-                    self._start_recording()
-                    # El módulo ya hace el sleep, al terminar paramos
-                    self._mission_win.after(int(duration * 1000), self._stop_recording)
+                # Iniciar grabación inmediatamente
+                self._mission_win.after(0, self._start_recording)
+                # El módulo esperará la duración, luego detenemos
+                wp = waypoints_to_execute[idx] if idx < len(waypoints_to_execute) else {}
+                duration = wp.get('video_duration', 5)
+                self._mission_win.after(int(duration * 1000), self._stop_recording)
+            elif action_name == 'photo':
+                # Tomar foto desde la interfaz si es necesario
+                pass  # El módulo ya llama a self.photo()
 
         def on_finish():
             """Callback al terminar la misión."""
@@ -4584,6 +4635,7 @@ class MiniRemoteApp:
                     face_target=True,  # Rotar hacia destino antes de moverse (como un coche)
                     blocking=True,
                     on_wp=on_wp_arrived,
+                    on_action=on_action,
                     on_finish=on_finish
                 )
             except Exception as e:
