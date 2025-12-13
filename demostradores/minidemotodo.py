@@ -840,18 +840,31 @@ class MiniRemoteApp:
                 rgb = cv2.cvtColor(canvas_preview, cv2.COLOR_BGR2RGB)
                 img = Image.fromarray(rgb)
                 imgtk = ImageTk.PhotoImage(image=img)
-                self.fpv_label.configure(image=imgtk, text="")
-                self.fpv_label.image = imgtk
+
+                # Solo actualizar UI si fpv_label existe
+                if self.fpv_label is not None:
+                    self.fpv_label.configure(image=imgtk, text="")
+                    self.fpv_label.image = imgtk
                 if self._rec_running:
+                    # Log cada 30 frames (1 segundo aprox)
+                    if self._rec_frame_count % 30 == 0:
+                        print(f"[_fpv_loop] Grabando... frames={self._rec_frame_count}, writer={'OK' if self._rec_writer else 'None'}")
+
                     if self._rec_writer is None:
                         print(f"[_fpv_loop] Writer es None, creando con tamaño {target_w}x{target_h}")
                         self._start_writer((target_w, target_h))
-                    try:
-                        if self._rec_writer is not None:
+
+                    if self._rec_writer is not None:
+                        try:
                             self._rec_writer.write(canvas_base)
                             self._rec_frame_count += 1
-                    except Exception as e:
-                        print(f"[_fpv_loop] ERROR escribiendo frame: {e}")
+                            if self._rec_frame_count == 1:
+                                print(f"[_fpv_loop] Primer frame escrito correctamente")
+                        except Exception as e:
+                            print(f"[_fpv_loop] ERROR escribiendo frame {self._rec_frame_count}: {e}")
+                    else:
+                        if self._rec_frame_count == 0:
+                            print(f"[_fpv_loop] WARNING: Writer es None, no se pueden escribir frames")
                     now = time.time()
                     if now - last_badge_toggle > 0.5:
                         rec_on = not rec_on
@@ -865,8 +878,9 @@ class MiniRemoteApp:
             pass
 
     def _set_fpv_text(self, text):
-        self.fpv_label.configure(text=text, image="")
-        self.fpv_label.image = None
+        if self.fpv_label is not None:
+            self.fpv_label.configure(text=text, image="")
+            self.fpv_label.image = None
 
     def take_snapshot(self):
         with self._frame_lock:
@@ -890,9 +904,35 @@ class MiniRemoteApp:
 
     def _start_writer(self, size_wh):
         self._rec_size = size_wh
-        fourcc = cv2.VideoWriter_fourcc(*"XVID")
-        self._rec_writer = cv2.VideoWriter(self._rec_path, fourcc, self._rec_fps, self._rec_size)
-        print(f"[_start_writer] VideoWriter creado: path={self._rec_path}, size={size_wh}, fps={self._rec_fps}")
+
+        # Asegurar que el path termina en .avi
+        if self._rec_path.endswith('.mp4'):
+            self._rec_path = self._rec_path[:-4] + '.avi'
+
+        # Probar con diferentes códecs hasta que uno funcione
+        codecs_to_try = [
+            ('XVID', 'XVID'),
+            ('MJPG', 'MJPEG'),
+            ('mp4v', 'MP4V'),
+        ]
+
+        for codec_code, codec_name in codecs_to_try:
+            try:
+                fourcc = cv2.VideoWriter_fourcc(*codec_code)
+                self._rec_writer = cv2.VideoWriter(self._rec_path, fourcc, self._rec_fps, self._rec_size)
+
+                if self._rec_writer is not None and self._rec_writer.isOpened():
+                    print(f"[_start_writer] VideoWriter abierto con {codec_name}: path={self._rec_path}, size={size_wh}, fps={self._rec_fps}")
+                    return
+                else:
+                    if self._rec_writer is not None:
+                        self._rec_writer.release()
+                    self._rec_writer = None
+            except Exception as e:
+                print(f"[_start_writer] Fallo con códec {codec_name}: {e}")
+                self._rec_writer = None
+
+        print(f"[_start_writer] ERROR: No se pudo abrir VideoWriter con ningún códec")
 
     def _start_recording(self):
         # Usar gestor de sesiones para obtener ruta
@@ -900,6 +940,8 @@ class MiniRemoteApp:
         self._rec_running = True
         self._rec_writer = None
         self._rec_frame_count = 0
+
+        print(f"[_start_recording] FPV running: {self._fpv_running}")
 
         # Inicializar el writer inmediatamente si ya hay frames disponibles
         with self._frame_lock:
