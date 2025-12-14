@@ -894,42 +894,124 @@ class MiniRemoteApp:
         self._rec_writer = cv2.VideoWriter(self._rec_path, fourcc, self._rec_fps, self._rec_size)
         print(f"[_start_writer] VideoWriter creado: path={self._rec_path}, size={size_wh}, fps={self._rec_fps}")
 
+    def _recording_thread_func(self):
+        """Hilo dedicado para grabación de video, independiente del FPV visual."""
+        print("[_recording_thread] Iniciando hilo de grabación")
+        frames_sin_datos = 0
+        last_log_time = time.time()
+        target_fps = self._rec_fps  # 30fps
+        frame_interval = 1.0 / target_fps  # ~33ms
+        last_frame_time = time.time()
+
+        while self._rec_running:
+            try:
+                frame = None
+
+                # Leer del VideoCapture
+                if hasattr(self, '_cv_cap') and self._cv_cap is not None and self._cv_cap.isOpened():
+                    ret, direct_frame = self._cv_cap.read()
+                    if ret and direct_frame is not None:
+                        frame = direct_frame
+                        # Actualizar _last_bgr para otros usos (fotos, etc)
+                        with self._frame_lock:
+                            self._last_bgr = frame
+
+                if frame is not None:
+                    frames_sin_datos = 0
+
+                    # Crear writer si no existe
+                    if self._rec_writer is None:
+                        h, w = frame.shape[:2]
+                        print(f"[_recording_thread] Creando writer con tamaño {w}x{h}")
+                        self._start_writer((w, h))
+
+                    # Escribir frame (limitado a target_fps)
+                    now = time.time()
+                    if now - last_frame_time >= frame_interval:
+                        if self._rec_writer is not None:
+                            self._rec_writer.write(frame)
+                            self._rec_frame_count += 1
+                            last_frame_time = now
+
+                            # Log cada ~1 segundo
+                            if now - last_log_time >= 1.0:
+                                print(f"[_recording_thread] Frames grabados: {self._rec_frame_count}")
+                                last_log_time = now
+                else:
+                    frames_sin_datos += 1
+                    if frames_sin_datos == 30:
+                        print("[_recording_thread] WARNING: No hay frames disponibles")
+                    time.sleep(0.01)
+
+            except Exception as e:
+                print(f"[_recording_thread] Error: {e}")
+                time.sleep(0.05)
+
+        print(f"[_recording_thread] Hilo terminado, frames grabados: {self._rec_frame_count}")
+
     def _start_recording(self):
         # Usar gestor de sesiones para obtener ruta
         self._rec_path = self._session_manager.get_video_path()
-        self._rec_running = True
         self._rec_writer = None
         self._rec_frame_count = 0
+        self._rec_thread = None
 
-        # Verificar que el FPV está activo antes de iniciar grabación
-        if not self._fpv_running:
-            print("[_start_recording] WARNING: FPV no está corriendo, iniciando...")
-            self.start_fpv()
-            # Esperar un poco a que se inicie
-            import time as time_mod
-            time_mod.sleep(0.3)
+        # Asegurar que hay un stream de video activo
+        # Verificar si _cv_cap existe y está abierto
+        need_stream = False
+        if not hasattr(self, '_cv_cap') or self._cv_cap is None:
+            need_stream = True
+        elif not self._cv_cap.isOpened():
+            need_stream = True
 
-        # Intentar inicializar el writer con reintentos
-        max_retries = 10
-        for attempt in range(max_retries):
-            with self._frame_lock:
-                frame = self._last_bgr
-            if frame is not None:
-                h, w = frame.shape[:2]
-                print(f"[_start_recording] Inicializando writer con tamaño {w}x{h} (intento {attempt+1})")
-                self._start_writer((w, h))
-                break
-            import time as time_mod
-            time_mod.sleep(0.1)
+        if need_stream:
+            print("[_start_recording] Iniciando stream de video...")
+            try:
+                # Activar stream del dron
+                if hasattr(self.dron, "_tello"):
+                    self.dron._tello.streamon()
+                    time.sleep(0.3)
+                # Crear VideoCapture
+                self._cv_cap = cv2.VideoCapture("udp://0.0.0.0:11111", cv2.CAP_FFMPEG)
+                self._cv_cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+            except Exception as e:
+                print(f"[_start_recording] Error iniciando stream: {e}")
+
+        # Esperar a que haya frames disponibles
+        print("[_start_recording] Esperando frames del stream...")
+        max_wait = 50  # 5 segundos máximo
+        for i in range(max_wait):
+            # Intentar leer un frame directamente
+            if self._cv_cap is not None and self._cv_cap.isOpened():
+                ret, frame = self._cv_cap.read()
+                if ret and frame is not None:
+                    with self._frame_lock:
+                        self._last_bgr = frame
+                    print(f"[_start_recording] Frame disponible después de {i*0.1:.1f}s")
+                    break
+            time.sleep(0.1)
         else:
-            print("[_start_recording] WARNING: No hay frame disponible después de varios intentos")
-            print("[_start_recording] El writer se creará cuando llegue el primer frame")
+            print("[_start_recording] WARNING: No se pudo obtener frame del stream")
+
+        # Iniciar el flag de grabación y el hilo dedicado
+        self._rec_running = True
+        self._rec_thread = threading.Thread(target=self._recording_thread_func, daemon=True)
+        self._rec_thread.start()
+        print("[_start_recording] Hilo de grabación iniciado")
 
         self._hud_show("Grabando...", 1.5)
 
     def _stop_recording(self):
         if self._rec_running:
             self._rec_running = False
+
+            # Esperar a que el hilo de grabación termine
+            if hasattr(self, '_rec_thread') and self._rec_thread is not None:
+                print("[_stop_recording] Esperando a que termine el hilo de grabación...")
+                self._rec_thread.join(timeout=2.0)  # Máximo 2 segundos
+                if self._rec_thread.is_alive():
+                    print("[_stop_recording] WARNING: El hilo no terminó a tiempo")
+
             video_path = self._rec_path
             frames_recorded = self._rec_frame_count
 
@@ -4690,7 +4772,7 @@ class MiniRemoteApp:
                     import traceback
                     traceback.print_exc()
             elif action_name == 'video':
-                # Iniciar grabación inmediatamente
+                # Iniciar grabación de video
                 print(f"[on_action] Iniciando grabación de video")
                 import time as time_module
                 import threading
@@ -4699,43 +4781,19 @@ class MiniRemoteApp:
                 duration = float(wp.get('video_duration', 5) or 5)
 
                 try:
-                    # PASO 1: Asegurar que el stream está activo
-                    if not self._fpv_running:
-                        print("[on_action] Stream no activo, iniciando FPV...")
-                        self.start_fpv()
-
-                    # PASO 2: Esperar a que haya frames disponibles (máximo 5 segundos)
-                    print("[on_action] Esperando a que el stream esté listo...")
-                    stream_ready = False
-                    for i in range(50):
-                        with self._frame_lock:
-                            if self._last_bgr is not None:
-                                stream_ready = True
-                                print(f"[on_action] Stream listo después de {i*0.1:.1f}s")
-                                break
-                        time_module.sleep(0.1)
-
-                    if not stream_ready:
-                        print("[on_action] ERROR: No hay frames de video disponibles")
-                        print("[on_action] El video quedará vacío - verifica la conexión del dron")
-
-                    # PASO 3: Iniciar la grabación
+                    # _start_recording ahora maneja todo: stream, espera de frames, hilo de grabación
                     self._start_recording()
 
-                    # PASO 4: Esperar a que el writer esté creado y grabando
-                    print("[on_action] Esperando a que el writer esté listo...")
-                    writer_ready = False
-                    for i in range(30):  # Máximo 3 segundos
-                        if self._rec_writer is not None and self._rec_frame_count > 0:
-                            writer_ready = True
-                            print(f"[on_action] Writer listo, frames grabados: {self._rec_frame_count}")
+                    # Esperar brevemente a que el hilo empiece a grabar
+                    for i in range(20):  # Máximo 2 segundos
+                        if self._rec_frame_count > 0:
+                            print(f"[on_action] Grabación confirmada, frames: {self._rec_frame_count}")
                             break
                         time_module.sleep(0.1)
+                    else:
+                        print(f"[on_action] WARNING: Grabación iniciada pero sin confirmar frames aún")
 
-                    if not writer_ready:
-                        print(f"[on_action] WARNING: Writer no confirmado (writer={self._rec_writer is not None}, frames={self._rec_frame_count})")
-
-                    print(f"[on_action] Grabación iniciada, durará {duration}s")
+                    print(f"[on_action] Grabando video por {duration}s...")
 
                 except Exception as e:
                     print(f"[on_action] Error iniciando grabación: {e}")
