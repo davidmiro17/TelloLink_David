@@ -285,20 +285,7 @@ def run_mission(self,
                 on_wp: Optional[Callable[[int, Dict[str, Any]], None]] = None,
                 on_action: Optional[Callable[[int, str], None]] = None,
                 on_finish: Optional[Callable[[], None]] = None) -> None:
-    """
-    Ejecuta una misión de waypoints.
 
-    Args:
-        waypoints: Lista de waypoints (absolutos o relativos)
-        do_land: Si True, aterriza al finalizar la misión
-        return_home: Si True, vuelve al origen (0,0) antes de aterrizar
-        face_target: Si True, el dron rotará para mirar hacia cada destino antes de moverse
-                    (como un coche, en vez de ir marcha atrás)
-        blocking: Si True, espera a que termine la misión
-        on_wp: Callback llamado al llegar a cada waypoint
-        on_action: Callback llamado al ejecutar una acción (foto, video, rotate, wait)
-        on_finish: Callback llamado al finalizar la misión
-    """
     th = threading.Thread(target=_mission_worker,
                           args=(self, waypoints, do_land, return_home, face_target, on_wp, on_action, on_finish),
                           daemon=True)

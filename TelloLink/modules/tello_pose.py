@@ -124,12 +124,7 @@ class PoseVirtual:
 
 #A partir de usar el joystick (modo rc), la pose se calcula de esta manera, a partir de las velocidades del joystick.
     def update_from_rc(self, vx_pct, vy_pct, vz_pct, yaw_pct, dt_sec=0.1):
-        """
-        Actualiza la pose desde comandos RC (joystick).
-        Sistema de coordenadas:
-        - yaw=0 → forward apunta a +X
-        - yaw=0 → right apunta a +Y
-        """
+
         import math
 
         # Velocidad máxima del Tello en modo "slow" al usar el joystick. Es un valor que se encuentra en el SDK, el cual está en torno a 2-2.1 m/s

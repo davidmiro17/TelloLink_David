@@ -28,7 +28,7 @@ def _ensure_stream(self):   #Función para preparar el stream si no está ya act
 
 def _video_loop(self, window_name, resize):  #Esta función consiste en el bucle que mantiene la ventana de vídeo en la pantalla
     import cv2
-    while getattr(self, "_video_run", False): #Mientras el vídeo este corriendo
+    while getattr(self, "_video_run", False): #Mientras el vídeo esta corriendo
         fr = getattr(self, "_frame_reader", None) #Busca si hay un frame reader
         frame = None if fr is None else fr.frame #Si existe toma el último frame de su buffer, si no existe o no hay frame aún, = None
         if frame is None: #Si áun no hay frame (aún no ha llegado vídeo)

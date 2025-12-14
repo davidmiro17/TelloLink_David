@@ -1,7 +1,7 @@
 import threading
 import time
 
-#Funcion en la que intentamos leer la altura del backend del Tello, y si falla usamos el valor guardado en self.height_cm
+#Función en la que intentamos leer la altura del backend del Tello, y si falla usamos el valor guardado en self.height_cm
 def _read_height_cm_runtime(self) -> float:
 
     try:

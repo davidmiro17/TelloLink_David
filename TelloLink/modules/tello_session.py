@@ -286,9 +286,7 @@ def migrate_legacy_files(captures_dir: str, videos_dir: str, sessions_dir: str) 
     return True
 
 
-# =============================================================================
-# MÉTODOS PARA "COLGAR" EN TelloDron
-# ============================================================================
+
 
 def start_flight_session(self) -> str:
 

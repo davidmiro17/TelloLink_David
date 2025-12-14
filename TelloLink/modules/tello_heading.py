@@ -1,7 +1,7 @@
 import time
 
 MIN_DEG = 1
-STEP_MAX_DEG = 360      # El SDK solo acepta 1..360 por comando
+STEP_MAX_DEG = 360      # El SDK solo acepta 1..360 por cada comando
 COOLDOWN_S = 0.4        #pequeña pausa entre comandos por seguridad
 ROTATION_SPEED_DEG_S = 90  # Velocidad aproximada de rotación del Tello (grados/segundo)
 

@@ -5,7 +5,7 @@ from djitellopy import Tello
 
 def _connect(self, freq=5, callback=None, params=None):
     try:
-        # Crea el objeto Tello y conecta
+        #Crea el objeto Tello y conecta
         self._tello = Tello()
 
         #  Aumentar timeout para comandos lentos

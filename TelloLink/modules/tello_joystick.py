@@ -2,7 +2,7 @@ import pygame
 import time
 import os
 
-# Permitir eventos de joystick en segundo plano
+#Permitir eventos de joystick en segundo plano
 os.environ.setdefault("SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS", "1")
 
 

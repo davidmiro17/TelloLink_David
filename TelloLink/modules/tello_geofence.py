@@ -904,21 +904,7 @@ def aplicar_geofence_rc(self, vx_joy, vy_joy, vz, yaw_joy):
 # ============================================================================
 
 def set_layers(self, layers: List[Dict] = None):
-    """
-    Configura las capas de altitud.
 
-    Parámetros:
-        layers: Lista de diccionarios con formato:
-                [{"name": "Capa 1", "z_min": 0, "z_max": 60}, ...]
-                Si es None, usa las capas por defecto.
-
-    Ejemplo:
-        dron.set_layers([
-            {"name": "Suelo", "z_min": 0, "z_max": 50},
-            {"name": "Media", "z_min": 50, "z_max": 100},
-            {"name": "Alta", "z_min": 100, "z_max": 180},
-        ])
-    """
     if layers is None:
         self._gf_layers = [dict(layer) for layer in _DEFAULT_LAYERS]
     else:
@@ -946,27 +932,14 @@ def set_layers(self, layers: List[Dict] = None):
 
 
 def get_layers(self) -> List[Dict]:
-    """
-    Obtiene la configuración actual de capas.
 
-    Retorna:
-        Lista de diccionarios con las capas configuradas.
-    """
     if not hasattr(self, "_gf_layers") or not self._gf_layers:
         self._gf_layers = [dict(layer) for layer in _DEFAULT_LAYERS]
     return self._gf_layers
 
 
 def get_current_layer(self, z_cm: float = None) -> int:
-    """
-    Determina en qué capa está el dron según su altura.
 
-    Parámetros:
-        z_cm: Altura en cm. Si es None, usa la altura actual del dron.
-
-    Retorna:
-        Número de capa (1, 2 o 3). Retorna 0 si está fuera de rango.
-    """
     # Si no se proporciona altura, la obtenemos del dron
     if z_cm is None:
         pose = getattr(self, "pose", None)
@@ -999,21 +972,7 @@ def get_current_layer(self, z_cm: float = None) -> int:
 
 
 def get_exclusion_layers(self, exclusion: Dict) -> List[int]:
-    """
-    Determina qué capas ocupa una exclusión según su rango de altura.
 
-    Parámetros:
-        exclusion: Diccionario de exclusión con campos "zmin" y "zmax"
-
-    Retorna:
-        Lista de números de capa (1, 2, 3) que ocupa la exclusión.
-        Si zmin y zmax son None, retorna todas las capas [1, 2, 3].
-
-    Ejemplo:
-        Mesa (zmin=0, zmax=60) → [1]
-        Columna (zmin=None, zmax=None) → [1, 2, 3]
-        Estantería (zmin=30, zmax=100) → [1, 2]
-    """
     excl_zmin = exclusion.get("zmin")
     excl_zmax = exclusion.get("zmax")
 
@@ -1041,15 +1000,7 @@ def get_exclusion_layers(self, exclusion: Dict) -> List[int]:
 
 
 def get_exclusions_for_layer(self, layer_num: int) -> Tuple[List[Dict], List[Dict]]:
-    """
-    Obtiene las exclusiones que afectan a una capa específica.
 
-    Parámetros:
-        layer_num: Número de capa (1, 2 o 3)
-
-    Retorna:
-        Tupla (círculos, polígonos) que afectan a esa capa.
-    """
     circles = []
     polys = []
 
@@ -1065,12 +1016,7 @@ def get_exclusions_for_layer(self, layer_num: int) -> Tuple[List[Dict], List[Dic
 
 
 def check_layer_change(self) -> Optional[int]:
-    """
-    Verifica  el dron ha cambiado de capa.
 
-    Retorna:
-        Número de la nueva capa si hubo cambio, None si no cambió.
-    """
     current = get_current_layer(self)
     last = getattr(self, "_gf_last_layer", None)
 

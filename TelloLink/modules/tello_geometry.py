@@ -1,88 +1,58 @@
-"""
-Módulo de geometría y detección de colisiones para TelloLink.
-Contiene funciones para:
-- Intersección línea-círculo
-- Intersección línea-rectángulo
-- Intersección línea-polígono
-- Punto dentro de obstáculo
-- Validación de rutas contra obstáculos
-- Path planning: planificación de rutas evitando obstáculos
-"""
-
 import math
 from typing import List, Tuple, Dict, Any, Optional
 
 
+#Función que calcula si la ruta entre un punto y otro del dron cruza un obstáculo circular (círculo)
+
 def line_intersects_circle(x1: float, y1: float, x2: float, y2: float,
                            cx: float, cy: float, r: float) -> bool:
-    """
-    Comprueba si el segmento de (x1,y1) a (x2,y2) cruza el círculo en (cx,cy) con radio r.
 
-    Args:
-        x1, y1: Punto inicial del segmento
-        x2, y2: Punto final del segmento
-        cx, cy: Centro del círculo
-        r: Radio del círculo
-
-    Returns:
-        True si el segmento cruza o toca el círculo
-    """
-    # Vector del segmento
+    # Vector del segmento, la línea entre dos waypoints o entre el dron y un waypoint
     dx, dy = x2 - x1, y2 - y1
-    # Vector del inicio del segmento al centro del círculo
+    # Vector del inicio del segmento al centro del círculo, la línea entre el centro del círculo y la posición del dron
     fx, fy = x1 - cx, y1 - cy
 
+    #Cuadrado de la longitud del segmento
     a = dx * dx + dy * dy
-    if a == 0:  # Punto, no segmento
-        return math.sqrt(fx * fx + fy * fy) <= r
+    if a == 0:  # Punto, no segmento (ya que el inicio y el fin es el mismo punto).
+        return math.sqrt(fx * fx + fy * fy) <= r #True si el punto está dentro o en el borde del círculo, false si está fuera
 
+    #Producto escalar multiplicado por 2
     b = 2 * (fx * dx + fy * dy)
+
+    #Se compara la distancia del punto al centro del circulo al cuadrado con el radio al cuadrado. Si c es menor que 0,. Es decir c nos dice donde empieza el segmento respecto al círculo
     c = fx * fx + fy * fy - r * r
 
-    discriminant = b * b - 4 * a * c
-    if discriminant < 0:
-        return False  # No hay intersección
+    discriminante = b * b - 4 * a * c
+    if discriminante < 0:
+        return False  # No hay solución real, es decir, hay intersección
 
-    discriminant = math.sqrt(discriminant)
-    t1 = (-b - discriminant) / (2 * a)
-    t2 = (-b + discriminant) / (2 * a)
+    discriminant = math.sqrt(discriminante)
+    t1 = (-b - discriminant) / (2 * a)  #Primer punto donde la línea toca el círculo (entrada)
+    t2 = (-b + discriminant) / (2 * a) #Segundo punto donde la línea toca el círculo (salida)
 
-    # Comprobar si algún punto de intersección está dentro del segmento [0, 1]
+    # Comprobar si algún punto de intersección está dentro del segmento [0, 1], es decir si el punto de entrada o de salida esta dentro del segmento, o que el segmento esté dentro del círculo
     return (0 <= t1 <= 1) or (0 <= t2 <= 1) or (t1 < 0 and t2 > 1)
 
 
+#Función que comprueba si dos segmentos se cruzan
+
 def segments_intersect(ax1: float, ay1: float, ax2: float, ay2: float,
                        bx1: float, by1: float, bx2: float, by2: float) -> bool:
-    """
-    Comprueba si dos segmentos se cruzan usando el algoritmo CCW.
 
-    Args:
-        ax1, ay1, ax2, ay2: Primer segmento
-        bx1, by1, bx2, by2: Segundo segmento
-
-    Returns:
-        True si los segmentos se cruzan
-    """
+    #Función auxiliar para saber si yendo de "a" a "b" y a "c", se va en sentido horario o antihorario
     def ccw(ax: float, ay: float, bx: float, by: float, cx: float, cy: float) -> bool:
-        return (cy - ay) * (bx - ax) > (by - ay) * (cx - ax)
+        return (cy - ay) * (bx - ax) > (by - ay) * (cx - ax) #Producto vectorial, si es positivo giro antihorario (True), si es negativo giro horario (False)
 
+#Para detectar si dos extremos se cruzan, se han de cumplir las dos condiciones: los extremos del segmento A están en lados opuestos del segmento B y los extremos del segmento B están en lados opuestos del segmento A
     return (ccw(ax1, ay1, bx1, by1, bx2, by2) != ccw(ax2, ay2, bx1, by1, bx2, by2) and
             ccw(ax1, ay1, ax2, ay2, bx1, by1) != ccw(ax1, ay1, ax2, ay2, bx2, by2))
 
 
+#Función que comprueba si un segmento cruza un rectángulo
 def line_intersects_rect(x1: float, y1: float, x2: float, y2: float,
                          rx1: float, ry1: float, rx2: float, ry2: float) -> bool:
-    """
-    Comprueba si el segmento cruza el rectángulo.
 
-    Args:
-        x1, y1, x2, y2: Segmento
-        rx1, ry1: Esquina inferior izquierda del rectángulo
-        rx2, ry2: Esquina superior derecha del rectángulo
-
-    Returns:
-        True si el segmento cruza o está dentro del rectángulo
-    """
     # Comprobar los 4 lados del rectángulo
     edges = [
         (rx1, ry1, rx2, ry1),  # Inferior
@@ -90,6 +60,8 @@ def line_intersects_rect(x1: float, y1: float, x2: float, y2: float,
         (rx2, ry2, rx1, ry2),  # Superior
         (rx1, ry2, rx1, ry1),  # Izquierdo
     ]
+
+    #Comprueba con la función anterior si el segmento cruza ese lado
     for ex1, ey1, ex2, ey2 in edges:
         if segments_intersect(x1, y1, x2, y2, ex1, ey1, ex2, ey2):
             return True
@@ -99,20 +71,12 @@ def line_intersects_rect(x1: float, y1: float, x2: float, y2: float,
         return True
     return False
 
-
+#Función que comprueba si un segmento cruza un polígono
 def line_intersects_polygon(x1: float, y1: float, x2: float, y2: float,
                             points: List[Tuple[float, float]]) -> bool:
-    """
-    Comprueba si el segmento cruza el polígono.
-
-    Args:
-        x1, y1, x2, y2: Segmento
-        points: Lista de vértices del polígono [(x, y), ...]
-
-    Returns:
-        True si el segmento cruza algún lado del polígono
-    """
+    #Guarda el número de vertices del polígono
     n = len(points)
+    #Recorre cada lado del polígono y comprueba si el segmento lo cruza
     for i in range(n):
         px1, py1 = points[i]
         px2, py2 = points[(i + 1) % n]
@@ -121,17 +85,9 @@ def line_intersects_polygon(x1: float, y1: float, x2: float, y2: float,
     return False
 
 
+#Comprueba si un punto está dentro del polígono, con el algoritmo ray casting
 def point_in_polygon(x: float, y: float, points: List[Tuple[float, float]]) -> bool:
-    """
-    Comprueba si un punto está dentro de un polígono usando ray casting.
 
-    Args:
-        x, y: Punto a comprobar
-        points: Lista de vértices del polígono [(x, y), ...]
-
-    Returns:
-        True si el punto está dentro del polígono
-    """
     n = len(points)
     inside = False
     j = n - 1
@@ -143,18 +99,9 @@ def point_in_polygon(x: float, y: float, points: List[Tuple[float, float]]) -> b
         j = i
     return inside
 
-
+#Función que comprueba si un punto está dentro de un obstáculo, sin importar el tipo de obstáculo
 def point_in_obstacle(x: float, y: float, obs: Dict[str, Any]) -> bool:
-    """
-    Comprueba si un punto está dentro de un obstáculo de cualquier tipo.
 
-    Args:
-        x, y: Punto a comprobar
-        obs: Diccionario del obstáculo con 'type' y datos específicos
-
-    Returns:
-        True si el punto está dentro del obstáculo
-    """
     obs_type = obs.get('type', 'circle')
     if obs_type == 'circle':
         dist = math.sqrt((x - obs['cx']) ** 2 + (y - obs['cy']) ** 2)
@@ -165,19 +112,10 @@ def point_in_obstacle(x: float, y: float, obs: Dict[str, Any]) -> bool:
         return point_in_polygon(x, y, obs['points'])
     return False
 
-
+#Función que comprueba si un segmento cruza un obstáculo sin importar el tipo de obstáculo
 def line_intersects_obstacle(x1: float, y1: float, x2: float, y2: float,
                              obs: Dict[str, Any]) -> bool:
-    """
-    Comprueba si el segmento cruza un obstáculo de cualquier tipo.
 
-    Args:
-        x1, y1, x2, y2: Segmento
-        obs: Diccionario del obstáculo con 'type' y datos específicos
-
-    Returns:
-        True si el segmento cruza el obstáculo
-    """
     obs_type = obs.get('type', 'circle')
     if obs_type == 'circle':
         return line_intersects_circle(x1, y1, x2, y2, obs['cx'], obs['cy'], obs['r'])
@@ -187,17 +125,9 @@ def line_intersects_obstacle(x1: float, y1: float, x2: float, y2: float,
         return line_intersects_polygon(x1, y1, x2, y2, obs['points'])
     return False
 
-
+#Función que genera una descripción del obstáculo para mostrar en mensajes de error
 def get_obstacle_description(obs: Dict[str, Any]) -> str:
-    """
-    Devuelve una descripción legible del obstáculo.
 
-    Args:
-        obs: Diccionario del obstáculo
-
-    Returns:
-        String descriptivo del obstáculo
-    """
     obs_type = obs.get('type', 'circle')
     if obs_type == 'circle':
         return f"círculo en ({obs['cx']}, {obs['cy']})"
@@ -208,20 +138,11 @@ def get_obstacle_description(obs: Dict[str, Any]) -> str:
     return "obstáculo"
 
 
+#Función que valida que toda la misión no cruce ningún obstáculo
 def validate_mission_paths(waypoints: List[Dict[str, Any]],
                            obstacles: List[Dict[str, Any]],
                            return_home: bool = False) -> Tuple[bool, Optional[str]]:
-    """
-    Valida que las rutas entre waypoints no crucen obstáculos.
 
-    Args:
-        waypoints: Lista de waypoints [{'x', 'y', 'z', ...}, ...]
-        obstacles: Lista de obstáculos [{'type', ...}, ...]
-        return_home: Si True, también valida la ruta de vuelta a (0,0)
-
-    Returns:
-        Tupla (válido, mensaje_error). Si válido es True, mensaje_error es None.
-    """
     if not waypoints:
         return True, None
 
@@ -249,29 +170,20 @@ def validate_mission_paths(waypoints: List[Dict[str, Any]],
     return True, None
 
 
-# ============================================================================
+
 # PATH PLANNING - Planificación de rutas evitando obstáculos
-# ============================================================================
+
 
 _SAFETY_MARGIN = 30  # cm de margen adicional alrededor de obstáculos
 
 
 def _distance(x1: float, y1: float, x2: float, y2: float) -> float:
-    """Calcula la distancia euclidiana entre dos puntos."""
+
     return math.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2)
 
 
 def _get_obstacle_avoidance_points(obs: Dict[str, Any], margin: float = _SAFETY_MARGIN) -> List[Tuple[float, float]]:
-    """
-    Genera puntos candidatos para rodear un obstáculo.
 
-    Args:
-        obs: Diccionario del obstáculo
-        margin: Margen de seguridad adicional en cm
-
-    Returns:
-        Lista de puntos (x, y) que rodean el obstáculo
-    """
     obs_type = obs.get('type', 'circle')
 
     if obs_type == 'circle':
@@ -329,7 +241,7 @@ def _get_obstacle_avoidance_points(obs: Dict[str, Any], margin: float = _SAFETY_
 
 def _find_blocking_obstacle(x1: float, y1: float, x2: float, y2: float,
                             obstacles: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-    """Encuentra el primer obstáculo que bloquea el camino entre dos puntos."""
+
     for obs in obstacles:
         if line_intersects_obstacle(x1, y1, x2, y2, obs):
             return obs
@@ -338,13 +250,13 @@ def _find_blocking_obstacle(x1: float, y1: float, x2: float, y2: float,
 
 def _path_is_clear(x1: float, y1: float, x2: float, y2: float,
                    obstacles: List[Dict[str, Any]]) -> bool:
-    """Comprueba si el camino entre dos puntos está libre de obstáculos."""
+
     return _find_blocking_obstacle(x1, y1, x2, y2, obstacles) is None
 
 
 def _point_is_safe(x: float, y: float, obstacles: List[Dict[str, Any]],
                    margin: float = _SAFETY_MARGIN) -> bool:
-    """Comprueba si un punto está fuera de todos los obstáculos (con margen)."""
+
     for obs in obstacles:
         obs_type = obs.get('type', 'circle')
         if obs_type == 'circle':
@@ -365,25 +277,7 @@ def plan_path_around_obstacles(start_x: float, start_y: float,
                                 end_x: float, end_y: float,
                                 obstacles: List[Dict[str, Any]],
                                 max_depth: int = 5) -> List[Tuple[float, float]]:
-    """
-    Planifica una ruta desde (start_x, start_y) hasta (end_x, end_y) evitando obstáculos.
 
-    Usa un algoritmo greedy que:
-    1. Si el camino directo está libre, lo usa
-    2. Si hay un obstáculo, busca el mejor punto para rodearlo
-    3. Recursivamente planifica desde ese punto intermedio
-
-    Args:
-        start_x, start_y: Punto de inicio
-        end_x, end_y: Punto de destino
-        obstacles: Lista de obstáculos a evitar
-        max_depth: Profundidad máxima de recursión (evita bucles infinitos)
-
-    Returns:
-        Lista de puntos [(x, y), ...] que forman la ruta.
-        El primer punto es el inicio, el último es el destino.
-        Si no se puede encontrar ruta, devuelve camino directo.
-    """
     print(f"[plan_path] Inicio: ({start_x}, {start_y}) -> ({end_x}, {end_y}), depth={max_depth}")
 
     # Caso base: camino directo está libre
@@ -477,21 +371,7 @@ def plan_path_around_obstacles(start_x: float, start_y: float,
 def plan_mission_with_avoidance(waypoints: List[Dict[str, Any]],
                                  obstacles: List[Dict[str, Any]],
                                  return_home: bool = False) -> List[Dict[str, Any]]:
-    """
-    Genera una nueva lista de waypoints que evita obstáculos.
 
-    Para cada tramo entre waypoints, si hay obstáculo, inserta
-    waypoints intermedios para rodearlo.
-
-    Args:
-        waypoints: Lista original de waypoints [{'x', 'y', 'z', ...}, ...]
-        obstacles: Lista de obstáculos
-        return_home: Si True, incluye ruta de vuelta a (0,0)
-
-    Returns:
-        Nueva lista de waypoints con puntos intermedios añadidos.
-        Los waypoints intermedios tienen z=None (mantiene altura actual).
-    """
     if not waypoints:
         return []
 

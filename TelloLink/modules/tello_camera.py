@@ -56,7 +56,7 @@ def snapshot(self, path: str | None = None):  #Función para capturar imagen
         if frame is None:
             raise RuntimeError("No hay frame disponible (¿stream_on activo?)")
 
-    if path is None:  #Si no le pasamos la ruta para guardar la foto
+    if path is None:  #Si no  pasamos la ruta para guardar la foto
         out_dir = os.path.join(".", "snapshots")
         os.makedirs(out_dir, exist_ok=True)
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")

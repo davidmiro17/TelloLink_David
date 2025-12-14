@@ -123,8 +123,6 @@ def _telemetry_loop(self, period_s: float):
                     yaw_rad = math.radians(self.pose.yaw_deg)
                     cos_y = math.cos(yaw_rad)
                     sin_y = math.sin(yaw_rad)
-                    # dx_world = forward * cos(yaw) - right * sin(yaw)
-                    # dy_world = forward * sin(yaw) + right * cos(yaw)
                     dx_world = vx_local * cos_y - vy_local * sin_y
                     dy_world = vx_local * sin_y + vy_local * cos_y
                     self.pose.x_cm += dx_world * dt

@@ -290,20 +290,7 @@ def goto_rel(self,
              blocking: bool = True,
              callback: Optional[Callable[..., Any]] = None,
              params: Any = None) -> None:
-    """
-    Mueve el dron a una posición relativa usando el comando 'go x y z speed'.
 
-    Args:
-        dx_cm: Desplazamiento en X (sistema mundo)
-        dy_cm: Desplazamiento en Y (sistema mundo)
-        dz_cm: Desplazamiento en Z (arriba +)
-        yaw_deg: Ángulo al que rotar antes de moverse (opcional)
-        speed_cm_s: Velocidad en cm/s (10-100, default 50)
-        face_target: Si True, rota para mirar hacia el destino antes de moverse
-        blocking: Si True, espera a que termine el movimiento
-        callback: Función a llamar al terminar
-        params: Parámetros para el callback
-    """
     setattr(self, "_goto_abort", False)
 
     t = threading.Thread(
@@ -317,5 +304,5 @@ def goto_rel(self,
 
 
 def abort_goto(self) -> None:
-    """Aborta el movimiento en curso."""
+
     setattr(self, "_goto_abort", True)
