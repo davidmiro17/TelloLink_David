@@ -108,13 +108,16 @@ def _telemetry_loop(self, period_s: float):
             pass
 
         # Integración de velocidad para actualizar pose x/y en tiempo real
+        # NOTA: Saltar integración si goto o RC está en progreso (evita double-update)
+        goto_in_progress = getattr(self, "_goto_in_progress", False)
+        rc_active = getattr(self, "_rc_active", False)
         try:
             now = time.time()
             dt = now - getattr(self, "_last_pose_update_ts", now)
             self._last_pose_update_ts = now
 
-            # Solo integrar si estamos volando y hay velocidad significativa
-            if getattr(self, "state", "") == "flying" and hasattr(self, "pose") and self.pose is not None:
+            # Solo integrar si NO hay goto NI RC en progreso, estamos volando y hay velocidad significativa
+            if not goto_in_progress and not rc_active and getattr(self, "state", "") == "flying" and hasattr(self, "pose") and self.pose is not None:
                 speed = (vx_local**2 + vy_local**2)**0.5
                 if speed > 5 and dt > 0 and dt < 1.0:  # Velocidad > 5 cm/s y dt razonable
                     import math

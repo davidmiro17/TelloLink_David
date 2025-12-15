@@ -255,15 +255,17 @@ def _gf_monitor_loop(self):
     while getattr(self, "_gf_monitoring", False) and getattr(self, "_gf_enabled", False):
         try:
             # Solo verificamos si el dron está en un estado de vuelo activo
+            poll_s = getattr(self, "_gf_poll_s", 0.1)  # Default 100ms
+
             st = getattr(self, "state", "")
             if st not in ("flying", "landing", "hovering", "takingoff"):
-                time.sleep(self._gf_poll_s)
+                time.sleep(poll_s)
                 continue  # Si está en tierra, no hay nada que verificar
 
             # Obtenemos la posición actual del dron
             pose = getattr(self, "pose", None)
             if pose is None:
-                time.sleep(self._gf_poll_s)
+                time.sleep(poll_s)
                 continue  # Sin pose, no podemos verificar
 
             # Extraemos coordenadas
@@ -290,7 +292,7 @@ def _gf_monitor_loop(self):
         except Exception as e:
             print(f"[geofence] Error monitor: {e}")
 
-        time.sleep(self._gf_poll_s)  # Esperamos antes de la siguiente verificación
+        time.sleep(poll_s)  # Esperamos antes de la siguiente verificación
 
     # Salimos del bucle - marcamos que ya no estamos monitoreando
     self._gf_monitoring = False
@@ -302,26 +304,44 @@ def _inside_inclusion(self, x, y, z):
     if not lim:
         return True
 
-    # Obtenemos el centro del geofence
-    cx, cy = getattr(self, "_gf_center", (0.0, 0.0))
+    # Soporte para formato nuevo (x1,y1,x2,y2) y antiguo (max_x,max_y,center)
+    if "x1" in lim and "x2" in lim:
+        # Formato nuevo: coordenadas absolutas
+        x1 = float(lim.get("x1", 0.0))
+        y1 = float(lim.get("y1", 0.0))
+        x2 = float(lim.get("x2", 0.0))
+        y2 = float(lim.get("y2", 0.0))
+        zmin = float(lim.get("zmin", 0.0) or 0.0)
+        zmax = float(lim.get("zmax", 200.0) or 200.0)
 
-    # Obtenemos los límites
-    max_x = float(lim.get("max_x", 0.0) or 0.0)
-    max_y = float(lim.get("max_y", 0.0) or 0.0)
-    max_z = float(lim.get("max_z", 0.0) or 0.0)
-    zmin = float(lim.get("zmin", 0.0) or 0.0)
+        # Normalizar (asegurar x1 < x2, y1 < y2)
+        if x1 > x2:
+            x1, x2 = x2, x1
+        if y1 > y2:
+            y1, y2 = y2, y1
 
-    # max_x/max_y son el ANCHO TOTAL, así que dividimos por 2
-    # para obtener la distancia máxima desde el centro
-    half_x = max_x / 2.0
-    half_y = max_y / 2.0
+        in_x = x1 <= x <= x2
+        in_y = y1 <= y <= y2
+        in_z = zmin <= z <= zmax
 
-    # Verificamos cada eje (si el límite es 0, no hay restricción en ese eje)
-    in_x = True if max_x <= 0 else (abs(x - cx) <= half_x)
-    in_y = True if max_y <= 0 else (abs(y - cy) <= half_y)
-    in_z = True if max_z <= 0 else (zmin <= z <= max_z)
+        return in_x and in_y and in_z
+    else:
+        # Formato antiguo: centro + dimensiones
+        cx, cy = getattr(self, "_gf_center", (0.0, 0.0))
 
-    return in_x and in_y and in_z
+        max_x = float(lim.get("max_x", 0.0) or 0.0)
+        max_y = float(lim.get("max_y", 0.0) or 0.0)
+        max_z = float(lim.get("max_z", 0.0) or 0.0)
+        zmin = float(lim.get("zmin", 0.0) or 0.0)
+
+        half_x = max_x / 2.0
+        half_y = max_y / 2.0
+
+        in_x = True if max_x <= 0 else (abs(x - cx) <= half_x)
+        in_y = True if max_y <= 0 else (abs(y - cy) <= half_y)
+        in_z = True if max_z <= 0 else (zmin <= z <= max_z)
+
+        return in_x and in_y and in_z
 
 
 # Función para verificar si se encuentra dentro de alguna zona de exclusión
@@ -578,58 +598,92 @@ def calcular_distancia_peligro(x_dron, y_dron, z_dron,
     # Solo nos importa el borde hacia donde vamos
 
     if limites:
-        # Extraemos el centro del geofence
-        cx, cy = centro
+        # Soporte para formato nuevo (x1,y1,x2,y2) y antiguo (max_x,max_y,center)
+        if "x1" in limites and "x2" in limites:
+            # Formato nuevo: coordenadas absolutas
+            x1 = float(limites.get("x1", 0.0))
+            y1 = float(limites.get("y1", 0.0))
+            x2 = float(limites.get("x2", 0.0))
+            y2 = float(limites.get("y2", 0.0))
+            z_min = float(limites.get("zmin", 0.0) or 0.0)
+            z_max = float(limites.get("zmax", 200.0) or 200.0)
 
+            # Normalizar
+            if x1 > x2:
+                x1, x2 = x2, x1
+            if y1 > y2:
+                y1, y2 = y2, y1
 
-        half_x = limites.get("max_x", 0) / 2
-        half_y = limites.get("max_y", 0) / 2
+            # Si vamos hacia +X
+            if vel_X_mundo > 0:
+                dist = x2 - x_dron
+                if dist > 0:
+                    distancias.append(dist)
+            # Si vamos hacia -X
+            elif vel_X_mundo < 0:
+                dist = x_dron - x1
+                if dist > 0:
+                    distancias.append(dist)
 
+            # Si vamos hacia +Y
+            if vel_Y_mundo > 0:
+                dist = y2 - y_dron
+                if dist > 0:
+                    distancias.append(dist)
+            # Si vamos hacia -Y
+            elif vel_Y_mundo < 0:
+                dist = y_dron - y1
+                if dist > 0:
+                    distancias.append(dist)
 
-        z_min = limites.get("zmin", 0)
-        z_max = limites.get("max_z", 200)
+            # Si subimos
+            if vel_Z > 0:
+                dist = z_max - z_dron
+                if dist > 0:
+                    distancias.append(dist)
+            # Si bajamos
+            elif vel_Z < 0:
+                dist = z_dron - z_min
+                if dist > 0:
+                    distancias.append(dist)
+        else:
+            # Formato antiguo: centro + dimensiones
+            cx, cy = centro
 
+            half_x = limites.get("max_x", 0) / 2
+            half_y = limites.get("max_y", 0) / 2
 
+            z_min = limites.get("zmin", 0)
+            z_max = limites.get("max_z", 200)
 
-        # Si vamos hacia +X (adelante en el mundo)
-        if vel_X_mundo > 0 and half_x > 0:
-            # El límite adelante está en: centro + mitad del ancho
-            limite_adelante= cx + half_x
-            # La distancia es: límite - donde estoy
-            dist = limite_adelante - x_dron
-            distancias.append(dist)
+            # Si vamos hacia +X (adelante en el mundo)
+            if vel_X_mundo > 0 and half_x > 0:
+                limite_adelante = cx + half_x
+                dist = limite_adelante - x_dron
+                distancias.append(dist)
+            # Si vamos hacia -X (atras en el mundo)
+            elif vel_X_mundo < 0 and half_x > 0:
+                limite_atras = cx - half_x
+                dist = x_dron - limite_atras
+                distancias.append(dist)
 
-        # Si vamos hacia -X (atras en el mundo)
-        elif vel_X_mundo < 0 and half_x > 0:
-            # El límite atras está en: centro - mitad del ancho
-            limite_atras = cx - half_x
-            # La distancia es: donde estoy - límite
-            dist = x_dron - limite_atras
-            distancias.append(dist)
+            if vel_Y_mundo > 0 and half_y > 0:
+                limite_derecha = cy + half_y
+                dist = limite_derecha - y_dron
+                distancias.append(dist)
+            elif vel_Y_mundo < 0 and half_y > 0:
+                limite_izquierda = cy - half_y
+                dist = y_dron - limite_izquierda
+                distancias.append(dist)
 
-
-
-        if vel_Y_mundo > 0 and half_y > 0:
-            limite_derecha = cy + half_y
-            dist = limite_derecha - y_dron
-            distancias.append(dist)
-
-        elif vel_Y_mundo < 0 and half_y > 0:
-            limite_izquierda = cy - half_y
-            dist = y_dron - limite_izquierda
-            distancias.append(dist)
-
-
-
-        # Si subimos
-        if vel_Z > 0 and z_max > 0:
-            dist = z_max - z_dron
-            distancias.append(dist)
-
-        # Si bajamos
-        elif vel_Z < 0:
-            dist = z_dron - z_min
-            distancias.append(dist)
+            # Si subimos
+            if vel_Z > 0 and z_max > 0:
+                dist = z_max - z_dron
+                distancias.append(dist)
+            # Si bajamos
+            elif vel_Z < 0:
+                dist = z_dron - z_min
+                distancias.append(dist)
 
 
     #Exclusión (círculos)
@@ -638,77 +692,96 @@ def calcular_distancia_peligro(x_dron, y_dron, z_dron,
     # y a qué distancia está su borde
 
     for c in circulos_excl:
+        c_zmin = c.get("zmin")
+        c_zmax = c.get("zmax")
+        c_zmin = float(c_zmin) if c_zmin is not None else 0.0
+        c_zmax = float(c_zmax) if c_zmax is not None else 999.0
 
         c_x = c["cx"]  # Centro X del círculo
         c_y = c["cy"]  # Centro Y del círculo
         radio = c["r"]  # Radio del círculo
 
-        # Vector que va desde el dron hacia el centro del círculo
-        # Si el círculo está a la derecha, dy será positivo
-        # Si el círculo está arriba, dx será positivo
+        # Verificar si el dron está horizontalmente dentro del círculo
         dx = c_x - x_dron
         dy = c_y - y_dron
+        dist_al_centro = math.sqrt(dx * dx + dy * dy)
+        dentro_xy = dist_al_centro <= radio
 
-        #Producto escalar: nos dice si vamos hacia el círculo o no
-        # Si es positivo: vamos hacia el círculo
-        # Si es negativo o cero: vamos en otra dirección
-        producto = vel_X_mundo * dx + vel_Y_mundo * dy
+        # CASO 1: Dron está en el rango Z del obstáculo - bloqueo horizontal normal
+        if c_zmin <= z_dron <= c_zmax:
+            # Vector que va desde el dron hacia el centro del círculo
+            producto = vel_X_mundo * dx + vel_Y_mundo * dy
 
-        if producto > 0:
+            if producto > 0:
+                dist_al_borde = dist_al_centro - radio
+                if dist_al_borde > 0:
+                    distancias.append(dist_al_borde)
 
+        # CASO 2: Dron está ENCIMA del obstáculo y bajando - bloqueo vertical
+        elif z_dron > c_zmax and vel_Z < 0 and dentro_xy:
+            # Si estamos encima del cilindro y bajando, calcular distancia al techo
+            dist_vertical = z_dron - c_zmax
+            if dist_vertical > 0:
+                distancias.append(dist_vertical)
 
-            # Distancia del dron al centro  del círculo (Pitágoras)
-            dist_al_centro = math.sqrt(dx * dx + dy * dy)
-
-            # Distancia al borde del círculo (perímetro)
-
-            dist_al_borde = dist_al_centro - radio
-
-            # Solo añadimos si es positiva
-            if dist_al_borde > 0:
-                distancias.append(dist_al_borde)
+        # CASO 3: Dron está encima del obstáculo y moviéndose horizontalmente hacia él
+        # Evitar que entre en el espacio XY del obstáculo si luego podría bajar
+        elif z_dron > c_zmax and not dentro_xy:
+            producto = vel_X_mundo * dx + vel_Y_mundo * dy
+            if producto > 0:
+                dist_al_borde = dist_al_centro - radio
+                if dist_al_borde > 0:
+                    distancias.append(dist_al_borde)
 
 
     # Exclusión (polígonos)
 
     for p in poligonos_excl:
+        p_zmin = p.get("zmin")
+        p_zmax = p.get("zmax")
+        p_zmin = float(p_zmin) if p_zmin is not None else 0.0
+        p_zmax = float(p_zmax) if p_zmax is not None else 999.0
+
         # Extraemos la lista de puntos del polígono
-
         poly = p["poly"]
+        if len(poly) < 3:
+            continue
 
-        # Vamos a buscar la distancia al segmento más cercano
+        # Verificar si el dron está horizontalmente dentro del polígono
+        dentro_xy = _point_in_poly(x_dron, y_dron, poly)
+
+        # Calcular distancia al borde más cercano
         dist_min_poly = float('inf')
-
-        # Recorremos cada lado del polígono
-        # El lado i va del punto i al punto i+1
         for i in range(len(poly)):
-            # Punto inicial del lado
             x1, y1 = poly[i]
-            # Punto final del lado (% len para cerrar el polígono)
             x2, y2 = poly[(i + 1) % len(poly)]
-
-            # Calculamos distancia del dron a este segmento
             dist_segmento = _distancia_punto_a_segmento(x_dron, y_dron, x1, y1, x2, y2)
-
-            # Nos quedamos con la menor
             if dist_segmento < dist_min_poly:
                 dist_min_poly = dist_segmento
 
-        # Ahora verificamos si vamos hacia  el polígono
-        # Usamos el  (punto medio) del polígono como referencia rápida de donde está el polígono
+        # Centroide para calcular dirección
         centroide_x = sum(pt[0] for pt in poly) / len(poly)
         centroide_y = sum(pt[1] for pt in poly) / len(poly)
-
-        # Vector del dron al centroide
         dx = centroide_x - x_dron
         dy = centroide_y - y_dron
 
-        # Producto escalar:
-        producto = vel_X_mundo * dx + vel_Y_mundo * dy
+        # CASO 1: Dron está en el rango Z del obstáculo - bloqueo horizontal normal
+        if p_zmin <= z_dron <= p_zmax:
+            producto = vel_X_mundo * dx + vel_Y_mundo * dy
+            if producto > 0 and dist_min_poly < float('inf'):
+                distancias.append(dist_min_poly)
 
-        if producto > 0 and dist_min_poly < float('inf'):
-            # Sí vamos hacia él, añadimos la distancia
-            distancias.append(dist_min_poly)
+        # CASO 2: Dron está ENCIMA del obstáculo y bajando - bloqueo vertical
+        elif z_dron > p_zmax and vel_Z < 0 and dentro_xy:
+            dist_vertical = z_dron - p_zmax
+            if dist_vertical > 0:
+                distancias.append(dist_vertical)
+
+        # CASO 3: Dron está encima del obstáculo y moviéndose horizontalmente hacia él
+        elif z_dron > p_zmax and not dentro_xy:
+            producto = vel_X_mundo * dx + vel_Y_mundo * dy
+            if producto > 0 and dist_min_poly < float('inf'):
+                distancias.append(dist_min_poly)
 
 
 
@@ -880,6 +953,38 @@ def aplicar_geofence_rc(self, vx_joy, vy_joy, vz, yaw_joy):
 
     #Transformarmos joystick a "mundo"
     vel_X_mundo, vel_Y_mundo = joystick_a_mundo(vx_joy, vy_joy, yaw_deg)
+
+    # ===== NUEVO: Verificar si ya estamos FUERA del geofence =====
+    # Si estamos fuera, solo permitir movimiento hacia DENTRO
+    if limites and "x1" in limites:
+        x1 = float(limites.get("x1", -999))
+        y1 = float(limites.get("y1", -999))
+        x2 = float(limites.get("x2", 999))
+        y2 = float(limites.get("y2", 999))
+        if x1 > x2:
+            x1, x2 = x2, x1
+        if y1 > y2:
+            y1, y2 = y2, y1
+
+        # Verificar si estamos fuera en X
+        if x_dron < x1:
+            # Fuera por la izquierda - solo permitir movimiento hacia +X
+            if vel_X_mundo < 0:
+                vel_X_mundo = 0
+        elif x_dron > x2:
+            # Fuera por la derecha - solo permitir movimiento hacia -X
+            if vel_X_mundo > 0:
+                vel_X_mundo = 0
+
+        # Verificar si estamos fuera en Y
+        if y_dron < y1:
+            # Fuera por abajo - solo permitir movimiento hacia +Y
+            if vel_Y_mundo < 0:
+                vel_Y_mundo = 0
+        elif y_dron > y2:
+            # Fuera por arriba - solo permitir movimiento hacia -Y
+            if vel_Y_mundo > 0:
+                vel_Y_mundo = 0
 
     #Calcular distancia al peligro más cercano
     distancia = calcular_distancia_peligro(x_dron, y_dron, z_dron, vel_X_mundo, vel_Y_mundo, vz, limites, centro, circulos, poligonos)

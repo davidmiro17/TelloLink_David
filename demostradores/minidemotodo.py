@@ -476,12 +476,16 @@ class MiniRemoteApp:
             except Exception:
                 h = 0.0
             if h <= 20:
+                self._hud_show("Ya en suelo", 1.0)
+                self.root.after(500, lambda: setattr(self, "_ui_landing", False))
                 return
-            if st not in ("flying", "hovering", "takingoff", "landing"):
+            if st not in ("flying", "hovering"):
+                self._hud_show(f"Estado: {st}", 1.0)
+                self.root.after(500, lambda: setattr(self, "_ui_landing", False))
                 return
             self._pause_keepalive()
             self.dron.Land(blocking=False)
-            self._hud_show(" Aterrizando", 1.5)
+            self._hud_show("Aterrizando", 1.5)
         except Exception as e:
             messagebox.showerror("Land", str(e))
         finally:
@@ -668,13 +672,11 @@ class MiniRemoteApp:
             cx = (x1 + x2) / 2
             cy = (y1 + y2) / 2
 
-            if hasattr(self.dron, "set_geofence"):
-                self.dron.set_geofence(max_x_cm=width_x, max_y_cm=width_y, max_z_cm=zmax, z_min_cm=zmin, mode=mode)
-            else:
-                setattr(self.dron, "_gf_enabled", True)
-                setattr(self.dron, "_gf_center", (cx, cy))
-                setattr(self.dron, "_gf_limits", {"x1": x1, "y1": y1, "x2": x2, "y2": y2, "zmin": zmin, "zmax": zmax})
-                setattr(self.dron, "_gf_mode", mode)
+            # Activar geofence con formato nuevo (coordenadas absolutas)
+            setattr(self.dron, "_gf_enabled", True)
+            setattr(self.dron, "_gf_center", (cx, cy))
+            setattr(self.dron, "_gf_limits", {"x1": x1, "y1": y1, "x2": x2, "y2": y2, "zmin": zmin, "zmax": zmax})
+            setattr(self.dron, "_gf_mode", mode)
 
             # Guardar el rectángulo de inclusión para dibujarlo (coordenadas absolutas)
             self._incl_rect = (x1, y1, x2, y2)
@@ -778,7 +780,12 @@ class MiniRemoteApp:
     def stop_fpv(self):
         self._fpv_running = False
         self._want_stream_on = False
-        time.sleep(0.05)
+
+        # Esperar a que el thread de FPV termine (máx 1 segundo)
+        fpv_th = getattr(self, "_fpv_thread", None)
+        if fpv_th is not None and fpv_th.is_alive():
+            fpv_th.join(timeout=1.0)
+
         try:
             if hasattr(self.dron, "stopVideo"):
                 self.dron.stopVideo()
@@ -789,13 +796,22 @@ class MiniRemoteApp:
                     pass
         except Exception:
             pass
-        try:
-            if self._cv_cap is not None:
-                self._cv_cap.release()
-        except Exception:
-            pass
-        finally:
-            self._cv_cap = None
+
+        # Liberar VideoCapture en un thread separado con timeout
+        # para evitar bloqueo si FFmpeg se cuelga
+        cap_to_release = self._cv_cap
+        self._cv_cap = None
+        if cap_to_release is not None:
+            def _release_cap():
+                try:
+                    cap_to_release.release()
+                except Exception:
+                    pass
+            release_thread = threading.Thread(target=_release_cap, daemon=True)
+            release_thread.start()
+            release_thread.join(timeout=1.0)  # Máx 1 segundo para liberar
+            # Si no terminó, el thread daemon morirá con el proceso
+
         self._hud_show("FPV detenido", 1.0)
 
     def _read_frame_generic(self):
@@ -817,6 +833,7 @@ class MiniRemoteApp:
     def _fpv_loop(self):
         last_badge_toggle = 0.0
         rec_on = False
+        last_rec_time = 0.0  # Para limitar grabación a 30fps
         try:
             while self._fpv_running:
                 frame_bgr = self._read_frame_generic()
@@ -846,12 +863,16 @@ class MiniRemoteApp:
                     if self._rec_writer is None:
                         print(f"[_fpv_loop] Writer es None, creando con tamaño {target_w}x{target_h}")
                         self._start_writer((target_w, target_h))
-                    try:
-                        if self._rec_writer is not None:
-                            self._rec_writer.write(canvas_base)
-                            self._rec_frame_count += 1
-                    except Exception as e:
-                        print(f"[_fpv_loop] ERROR escribiendo frame: {e}")
+                    # Grabar solo a 30fps para que duración real = duración video
+                    now_rec = time.time()
+                    if now_rec - last_rec_time >= 0.033:  # ~30fps
+                        try:
+                            if self._rec_writer is not None:
+                                self._rec_writer.write(canvas_base)
+                                self._rec_frame_count += 1
+                                last_rec_time = now_rec
+                        except Exception as e:
+                            print(f"[_fpv_loop] ERROR escribiendo frame: {e}")
                     now = time.time()
                     if now - last_badge_toggle > 0.5:
                         rec_on = not rec_on
@@ -993,11 +1014,17 @@ class MiniRemoteApp:
         else:
             print("[_start_recording] WARNING: No se pudo obtener frame del stream")
 
-        # Iniciar el flag de grabación y el hilo dedicado
+        # Iniciar el flag de grabación
         self._rec_running = True
-        self._rec_thread = threading.Thread(target=self._recording_thread_func, daemon=True)
-        self._rec_thread.start()
-        print("[_start_recording] Hilo de grabación iniciado")
+
+        # Solo iniciar hilo dedicado si NO hay FPV corriendo
+        # (si hay FPV, la grabación se hace en el loop de FPV)
+        if not self._fpv_running and not self._fpv_ext_running:
+            self._rec_thread = threading.Thread(target=self._recording_thread_func, daemon=True)
+            self._rec_thread.start()
+            print("[_start_recording] Hilo de grabación iniciado (sin FPV)")
+        else:
+            print("[_start_recording] Grabación delegada al loop de FPV")
 
         self._hud_show("Grabando...", 1.5)
 
@@ -1088,6 +1115,12 @@ class MiniRemoteApp:
     def stop_fpv_external(self):
         """Cierra la ventana FPV externa."""
         self._fpv_ext_running = False
+
+        # Esperar a que el thread de FPV externo termine (máx 1 segundo)
+        ext_th = getattr(self, "_fpv_ext_thread", None)
+        if ext_th is not None and ext_th.is_alive():
+            ext_th.join(timeout=1.0)
+
         # NO cerramos _cv_cap - se queda abierto para reutilizar
         try:
             cv2.destroyWindow("Tello FPV")
@@ -1099,6 +1132,7 @@ class MiniRemoteApp:
         window_name = "Tello FPV"
         cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
         cv2.resizeWindow(window_name, 640, 480)
+        last_rec_time = 0.0  # Para limitar grabación a 30fps
 
         while self._fpv_ext_running:
             try:
@@ -1112,19 +1146,25 @@ class MiniRemoteApp:
                 if self._cv_cap is not None and self._cv_cap.isOpened():
                     ok, frame = self._cv_cap.read()
                     if ok and frame is not None:
-                        # Guardar para snapshots/grabación
+                        # Guardar para snapshots
                         with self._frame_lock:
                             self._last_bgr = frame.copy()
 
-                        # Grabación
+                        # Grabación (en el mismo hilo para evitar conflictos FFmpeg)
                         if self._rec_running:
                             if self._rec_writer is None:
                                 h, w = frame.shape[:2]
                                 self._start_writer((w, h))
-                            try:
-                                self._rec_writer.write(frame)
-                            except Exception:
-                                pass
+                            # Grabar solo a 30fps para que duración real = duración video
+                            now_rec = time.time()
+                            if now_rec - last_rec_time >= 0.033:  # ~30fps
+                                if self._rec_writer is not None:
+                                    try:
+                                        self._rec_writer.write(frame)
+                                        self._rec_frame_count += 1
+                                        last_rec_time = now_rec
+                                    except Exception:
+                                        pass
 
                         # Dibujar overlays
                         self._draw_overlays(frame)
@@ -1291,6 +1331,9 @@ class MiniRemoteApp:
                         if self.dron.state == "flying":
                             vx_gf, vy_gf, vz_gf, yaw_gf = _vx, _vy, _vz, _yaw
 
+                            # Marcar RC activo para que telemetría no duplique integración de pose
+                            self.dron._rc_active = True
+
                             try:
                                 vx_gf, vy_gf, vz_gf, yaw_gf = self.dron.aplicar_geofence_rc(_vx, _vy, _vz, _yaw)
                                 self.dron.rc(int(vx_gf), int(vy_gf), int(vz_gf), int(yaw_gf))
@@ -1300,6 +1343,9 @@ class MiniRemoteApp:
 
                             if hasattr(self.dron, "pose") and self.dron.pose:
                                 self.dron.pose.update_from_rc(vy_gf, vx_gf, vz_gf, yaw_gf, dt_sec=0.05)
+                        else:
+                            # Si no está volando, desactivar flag RC
+                            self.dron._rc_active = False
 
                     self.root.after(0, _send)
 
@@ -1353,6 +1399,9 @@ class MiniRemoteApp:
 
     def _stop_joystick(self):
         self._joy_running = False
+        # Desactivar flag RC cuando se para el joystick
+        if hasattr(self, "dron") and self.dron:
+            self.dron._rc_active = False
 
     def _reconnect_joystick(self):
         """Detiene el joystick actual e intenta reconectar."""
@@ -2603,7 +2652,15 @@ class MiniRemoteApp:
         p1x, p1y = self._world_to_canvas(x1, y1)
         p2x, p2y = self._world_to_canvas(x2, y2)
 
-        self.map_canvas.create_rectangle(p1x, p1y, p2x, p2y, outline="#00aa00", width=3, tags=("inclusion",))
+        # Comprobar si geofence está activo
+        gf_enabled = getattr(self.dron, "_gf_enabled", False)
+
+        if gf_enabled:
+            # Activo: verde fuerte, línea gruesa
+            self.map_canvas.create_rectangle(p1x, p1y, p2x, p2y, outline="#00aa00", width=3, tags=("inclusion",))
+        else:
+            # Desactivado (standby): verde tenue, línea fina punteada
+            self.map_canvas.create_rectangle(p1x, p1y, p2x, p2y, outline="#88cc88", width=1, dash=(4, 4), tags=("inclusion",))
 
     def _update_layer_indicator(self, z_cm):
         """Actualiza el indicador de capa en el mapa."""
@@ -2622,35 +2679,36 @@ class MiniRemoteApp:
             # Fallback: calcular localmente
             layer = self._calculate_layer(z_cm)
 
+        # Obtener rango de altura de la capa actual
+        if hasattr(self.dron, "get_layers"):
+            layers = self.dron.get_layers()
+            if 0 < layer <= len(layers):
+                layer_info = layers[layer - 1]
+                z_range = f"({layer_info['z_min']:.0f}-{layer_info['z_max']:.0f}cm)"
+            else:
+                z_range = ""
+        else:
+            z_range = ""
+
+        # Color según la capa
+        colors = {
+            1: "#28a745",  # Verde - capa baja
+            2: "#fd7e14",  # Naranja - capa media
+            3: "#007bff",  # Azul - capa alta
+        }
+        bg_color = colors.get(layer, "#333333")
+
+        # Siempre actualizar el texto con la Z actual
+        z_str = f"{z_cm:.0f}" if z_cm is not None else "--"
+        self._layer_label.config(
+            text=f"Capa {layer} {z_range}\nAltura: {z_str} cm",
+            bg=bg_color
+        )
+
+        # Solo redibujar mapa y mostrar HUD cuando cambia de capa
         if layer != self._current_layer:
             self._last_layer = self._current_layer
             self._current_layer = layer
-
-            # Cambiar color según la capa (colores consistentes con el tema)
-            colors = {
-                1: "#28a745",  # Verde - capa baja
-                2: "#fd7e14",  # Naranja - capa media
-                3: "#007bff",  # Azul - capa alta
-            }
-            bg_color = colors.get(layer, "#333333")
-
-            # Obtener rango de altura de la capa
-            if hasattr(self.dron, "get_layers"):
-                layers = self.dron.get_layers()
-                if 0 < layer <= len(layers):
-                    layer_info = layers[layer - 1]
-                    z_range = f"({layer_info['z_min']:.0f}-{layer_info['z_max']:.0f}cm)"
-                else:
-                    z_range = ""
-            else:
-                z_range = ""
-
-            # Actualizar label
-            z_str = f"{z_cm:.0f}" if z_cm is not None else "--"
-            self._layer_label.config(
-                text=f"Capa {layer} {z_range}\nAltura: {z_str} cm",
-                bg=bg_color
-            )
 
             # Redibujar mapa para actualizar colores de obstáculos
             if self._last_layer != 0:  # No redibujar la primera vez
@@ -3249,6 +3307,9 @@ class MiniRemoteApp:
         if not messagebox.askyesno("Eliminar", "¿Eliminar este archivo?"):
             return
 
+        # Liberar el archivo si es video (para que Windows permita borrarlo)
+        self._stop_video_playback()
+
         media = self._gallery_media_list[self._viewer_index]
         if self._session_manager.delete_media(media["path"]):
             self._gallery_media_list.pop(self._viewer_index)
@@ -3260,6 +3321,8 @@ class MiniRemoteApp:
                 self._viewer_index = len(self._gallery_media_list) - 1
             self._viewer_show(viewer)
             self._gallery_apply_filter()
+        else:
+            messagebox.showerror("Error", "No se pudo eliminar el archivo")
 
     def _viewer_open_folder(self):
         """Abre la carpeta del archivo en el explorador."""

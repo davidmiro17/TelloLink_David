@@ -123,6 +123,26 @@ def _goto_rel_worker(self,
     """
     Worker que ejecuta el movimiento usando el comando 'go x y z speed'.
     """
+    # Marcar que goto está en progreso (evita double-update con telemetry)
+    setattr(self, "_goto_in_progress", True)
+
+    try:
+        _goto_rel_worker_impl(self, dx_cm, dy_cm, dz_cm, yaw_deg, speed_cm_s,
+                              face_target, callback, params)
+    finally:
+        setattr(self, "_goto_in_progress", False)
+
+
+def _goto_rel_worker_impl(self,
+                          dx_cm: float, dy_cm: float, dz_cm: float = 0.0,
+                          yaw_deg: Optional[float] = None,
+                          speed_cm_s: Optional[float] = None,
+                          face_target: bool = False,
+                          callback: Optional[Callable[..., Any]] = None,
+                          params: Any = None) -> None:
+    """
+    Implementación real del worker de goto_rel.
+    """
     # Chequeos básicos previos
     if not hasattr(self, "pose") or self.pose is None:
         print("[goto] No hay PoseVirtual; abortando.")
