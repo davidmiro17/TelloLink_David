@@ -40,7 +40,7 @@ from TelloLink.Tello import TelloDron
 from TelloLink import JoystickController
 from TelloLink.modules.tello_session import SessionManager, migrate_legacy_files
 from TelloLink.modules.tello_geometry import (
-    point_in_obstacle, validate_mission_paths, plan_mission_with_avoidance
+    point_in_obstacle, validate_mission_paths
 )
 
 BAT_MIN_SAFE = 20
@@ -57,6 +57,11 @@ MAP_TARGET_COLOR = "#d62728"
 PX_PER_CM = 1
 GRID_STEP_CM = 50
 CENTER_MARK_COLOR = "#666"
+
+# Límites de seguridad para misiones
+MISSION_MAX_HEIGHT_CM = 300    # Altura máxima permitida (3 metros)
+MISSION_MIN_HEIGHT_CM = 30     # Altura mínima permitida (30 cm)
+MISSION_MAX_DISTANCE_CM = 1000 # Distancia máxima desde origen (10 metros)
 
 
 def _ts():
@@ -970,7 +975,7 @@ class MiniRemoteApp:
 
         print(f"[_recording_thread] Hilo terminado, frames grabados: {self._rec_frame_count}")
 
-    def _start_recording(self):
+    def _start_recording(self, force_dedicated_thread=False):
         # Usar gestor de sesiones para obtener ruta
         self._rec_path = self._session_manager.get_video_path()
         self._rec_writer = None
@@ -1017,12 +1022,15 @@ class MiniRemoteApp:
         # Iniciar el flag de grabación
         self._rec_running = True
 
-        # Solo iniciar hilo dedicado si NO hay FPV corriendo
-        # (si hay FPV, la grabación se hace en el loop de FPV)
-        if not self._fpv_running and not self._fpv_ext_running:
+        # Usar hilo dedicado si:
+        # 1. No hay FPV corriendo, O
+        # 2. Se fuerza el uso del hilo dedicado (para misiones)
+        use_dedicated = force_dedicated_thread or (not self._fpv_running and not self._fpv_ext_running)
+
+        if use_dedicated:
             self._rec_thread = threading.Thread(target=self._recording_thread_func, daemon=True)
             self._rec_thread.start()
-            print("[_start_recording] Hilo de grabación iniciado (sin FPV)")
+            print("[_start_recording] Hilo de grabación dedicado iniciado")
         else:
             print("[_start_recording] Grabación delegada al loop de FPV")
 
@@ -2585,11 +2593,15 @@ class MiniRemoteApp:
                     self._incl_zmax_var.set(data.get("zmax", 120))
 
                 if self._incl_rect:
-                    _, _, max_x, max_y = self._incl_rect
-                    if hasattr(self, 'gf_max_x_var'):
-                        self.gf_max_x_var.set(str(int(max_x)))
-                    if hasattr(self, 'gf_max_y_var'):
-                        self.gf_max_y_var.set(str(int(max_y)))
+                    x1, y1, x2, y2 = self._incl_rect
+                    if hasattr(self, 'gf_x1_var'):
+                        self.gf_x1_var.set(str(int(x1)))
+                    if hasattr(self, 'gf_y1_var'):
+                        self.gf_y1_var.set(str(int(y1)))
+                    if hasattr(self, 'gf_x2_var'):
+                        self.gf_x2_var.set(str(int(x2)))
+                    if hasattr(self, 'gf_y2_var'):
+                        self.gf_y2_var.set(str(int(y2)))
             except:
                 pass
 
@@ -3408,7 +3420,17 @@ class MiniRemoteApp:
 
         def _on_mousewheel_mission(event):
             side_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
-        side_canvas.bind_all("<MouseWheel>", _on_mousewheel_mission)
+
+        # Bind mousewheel solo cuando el cursor está sobre el panel (no global)
+        def _bind_mousewheel(event):
+            side_canvas.bind_all("<MouseWheel>", _on_mousewheel_mission)
+        def _unbind_mousewheel(event):
+            side_canvas.unbind_all("<MouseWheel>")
+
+        side_canvas.bind("<Enter>", _bind_mousewheel)
+        side_canvas.bind("<Leave>", _unbind_mousewheel)
+        side_panel.bind("<Enter>", _bind_mousewheel)
+        side_panel.bind("<Leave>", _unbind_mousewheel)
 
         scrollbar.pack(side="right", fill="y")
         side_canvas.pack(side="left", fill="both", expand=True)
@@ -3891,11 +3913,6 @@ class MiniRemoteApp:
                        variable=self._mission_return_home_var, bg=BG_CARD,
                        font=("Arial", 8), activebackground=BG_CARD).pack(anchor="w", pady=2)
 
-        self._mission_auto_avoid_var = tk.BooleanVar(value=True)
-        tk.Checkbutton(exec_content, text="🚧 Evitar obstáculos automáticamente",
-                       variable=self._mission_auto_avoid_var, bg=BG_CARD,
-                       font=("Arial", 8), activebackground=BG_CARD).pack(anchor="w", pady=2)
-
         self._mission_status_label = tk.Label(exec_content, text="Estado: Listo",
                                                bg=BG_CARD, font=("Arial", 8), fg="#333")
         self._mission_status_label.pack(anchor="w", pady=2)
@@ -4187,8 +4204,62 @@ class MiniRemoteApp:
                 return
 
             self._draw_mission_drone_marker()
+
+            # Actualizar indicador de capa/altura en tiempo real
+            pose = getattr(self.dron, "pose", None)
+            if pose:
+                z = getattr(pose, "z_cm", None)
+                self._update_mission_layer_indicator(z)
         except Exception:
             pass
+
+    def _update_mission_layer_indicator(self, z_cm):
+        """Actualiza el indicador de capa y altura en el editor de misiones."""
+        if not hasattr(self, '_mission_layer_label') or not self._mission_layer_label:
+            return
+
+        # Si el dron no está volando (altura <= 5cm), no sobrescribir el indicador
+        if z_cm is None or z_cm <= 5:
+            return
+
+        # Obtener capa actual usando el método del dron
+        if hasattr(self.dron, "get_current_layer"):
+            layer = self.dron.get_current_layer(z_cm)
+        else:
+            layer = self._calculate_layer(z_cm)
+
+        # Obtener rango de altura de la capa actual
+        z_range = ""
+        if hasattr(self.dron, "get_layers"):
+            layers = self.dron.get_layers()
+            if 0 < layer <= len(layers):
+                layer_info = layers[layer - 1]
+                z_range = f"({layer_info['z_min']:.0f}-{layer_info['z_max']:.0f}cm)"
+
+        # Color según la capa
+        colors = {
+            1: "#28a745",  # Verde - capa baja
+            2: "#fd7e14",  # Naranja - capa media
+            3: "#007bff",  # Azul - capa alta
+        }
+        bg_color = colors.get(layer, "#333333")
+
+        # Actualizar el label con capa y altura actual
+        z_str = f"{z_cm:.0f}" if z_cm is not None else "--"
+        self._mission_layer_label.config(
+            text=f"Capa {layer} {z_range}\nAltura: {z_str} cm",
+            bg=bg_color
+        )
+
+        # Detectar cambio de capa y mostrar HUD
+        if not hasattr(self, '_mission_current_layer'):
+            self._mission_current_layer = 0
+
+        if layer != self._mission_current_layer and self._mission_current_layer != 0:
+            direction = "Subiendo" if layer > self._mission_current_layer else "Bajando"
+            self._hud_show(f"{direction} a Capa {layer}", 2.0)
+
+        self._mission_current_layer = layer
 
     def _on_mission_canvas_click(self, event):
         """Maneja clicks en el canvas de misiones."""
@@ -4196,21 +4267,49 @@ class MiniRemoteApp:
         tool = self._mission_tool.get()
 
         if tool == "waypoint":
+            # Obtener altura Z primero para validación 3D
+            z = self._wp_default_z.get()
+
+            # Validar límites de seguridad globales
+            distance_from_origin = math.sqrt(wx * wx + wy * wy)
+            if distance_from_origin > MISSION_MAX_DISTANCE_CM:
+                messagebox.showwarning("Límite de seguridad",
+                    f"El waypoint está a {distance_from_origin:.0f}cm del origen.\n"
+                    f"Máximo permitido: {MISSION_MAX_DISTANCE_CM}cm")
+                return
+
+            if z > MISSION_MAX_HEIGHT_CM:
+                messagebox.showwarning("Límite de seguridad",
+                    f"Altura {z}cm excede el máximo permitido ({MISSION_MAX_HEIGHT_CM}cm)")
+                return
+
+            if z < MISSION_MIN_HEIGHT_CM:
+                messagebox.showwarning("Límite de seguridad",
+                    f"Altura {z}cm es menor que el mínimo seguro ({MISSION_MIN_HEIGHT_CM}cm)")
+                return
+
             # Validar que está dentro del geofence
             if self._mission_geofence:
                 gf = self._mission_geofence
                 if not (gf['x1'] <= wx <= gf['x2'] and gf['y1'] <= wy <= gf['y2']):
                     messagebox.showwarning("Fuera de zona", "El waypoint está fuera del geofence")
                     return
-
-            # Validar que no está en un obstáculo (usa módulo tello_geometry)
-            for obs in self._mission_exclusions:
-                if point_in_obstacle(wx, wy, obs):
-                    messagebox.showwarning("Obstáculo", "El waypoint está dentro de un obstáculo")
+                # Validar Z contra geofence
+                gf_zmin = gf.get('zmin', 0)
+                gf_zmax = gf.get('zmax', 200)
+                if z < gf_zmin or z > gf_zmax:
+                    messagebox.showwarning("Fuera de zona",
+                        f"La altura {z}cm está fuera del geofence ({gf_zmin}-{gf_zmax}cm)")
                     return
 
-            # Añadir waypoint
-            z = self._wp_default_z.get()
+            # Validar que no está en un obstáculo (con validación Z)
+            for obs in self._mission_exclusions:
+                if point_in_obstacle(wx, wy, obs, z=z):
+                    obs_zmin = obs.get('zmin', 0)
+                    obs_zmax = obs.get('zmax', 200)
+                    messagebox.showwarning("Obstáculo",
+                        f"El waypoint (z={z}cm) colisiona con obstáculo en capa {obs_zmin}-{obs_zmax}cm")
+                    return
             wp = {
                 'x': round(wx, 1),
                 'y': round(wy, 1),
@@ -4422,12 +4521,18 @@ class MiniRemoteApp:
 
     def _close_mission_polygon(self):
         """Cierra el polígono de obstáculo actual."""
-        if len(self._mission_poly_points) >= 3:
+        n_points = len(self._mission_poly_points)
+        if n_points >= 3:
             zmin, zmax = self._get_mission_layer_z_range()
             obs = {'type': 'poly', 'points': list(self._mission_poly_points), 'zmin': zmin, 'zmax': zmax}
             self._mission_exclusions.append(obs)
-        self._mission_poly_points.clear()
-        self._draw_mission_map()
+            self._mission_poly_points.clear()
+            self._draw_mission_map()
+        elif n_points > 0:
+            messagebox.showwarning("Polígono incompleto",
+                f"Se necesitan al menos 3 puntos para un polígono.\nTienes {n_points} punto(s).")
+        else:
+            messagebox.showinfo("Sin polígono", "Primero dibuja puntos con la herramienta ⬡")
 
     def _get_mission_exclusion_layers(self, obs):
         """Determina en qué capas está un obstáculo basándose en su zmin/zmax."""
@@ -4643,6 +4748,29 @@ class MiniRemoteApp:
             print(f"[WP] Índice {idx} fuera de rango")
             return
 
+        # Validar límites de seguridad
+        distance_from_origin = math.sqrt(new_x * new_x + new_y * new_y)
+        if distance_from_origin > MISSION_MAX_DISTANCE_CM:
+            messagebox.showwarning("Límite de seguridad",
+                f"Distancia {distance_from_origin:.0f}cm excede el máximo ({MISSION_MAX_DISTANCE_CM}cm)")
+            return
+
+        if new_z > MISSION_MAX_HEIGHT_CM:
+            messagebox.showwarning("Límite de seguridad",
+                f"Altura {new_z}cm excede el máximo ({MISSION_MAX_HEIGHT_CM}cm)")
+            return
+
+        if new_z < MISSION_MIN_HEIGHT_CM:
+            messagebox.showwarning("Límite de seguridad",
+                f"Altura {new_z}cm es menor que el mínimo seguro ({MISSION_MIN_HEIGHT_CM}cm)")
+            return
+
+        # Validar contra obstáculos
+        for obs in self._mission_exclusions:
+            if point_in_obstacle(new_x, new_y, obs, z=new_z):
+                messagebox.showwarning("Obstáculo", "La nueva posición colisiona con un obstáculo")
+                return
+
         wp = self._mission_waypoints[idx]
         print(f"[WP] Actualizando WP{idx+1}: ({wp['x']},{wp['y']},{wp['z']}) -> ({new_x},{new_y},{new_z})")
         wp['x'] = new_x
@@ -4692,7 +4820,6 @@ class MiniRemoteApp:
             return
 
         return_home = self._mission_return_home_var.get() if hasattr(self, '_mission_return_home_var') else False
-        auto_avoid = self._mission_auto_avoid_var.get() if hasattr(self, '_mission_auto_avoid_var') else True
 
         # Validar rutas contra obstáculos
         try:
@@ -4706,28 +4833,11 @@ class MiniRemoteApp:
             msg = f"✅ Ruta válida ({len(self._mission_waypoints)} WPs)"
             self._mission_status_label.configure(text=msg, fg="#28a745")
             self._mission_win.after(50, lambda: messagebox.showinfo("Validación", msg, parent=self._mission_win))
-        elif auto_avoid and self._mission_exclusions:
-            # Ruta inválida pero auto_avoid está activado - path planning
-            try:
-                planned_wps = plan_mission_with_avoidance(
-                    self._mission_waypoints, self._mission_exclusions, return_home
-                )
-                n_original = len(self._mission_waypoints)
-                n_total = len(planned_wps)
-                n_intermediate = sum(1 for wp in planned_wps if wp.get('_intermediate', False))
-
-                msg = f"🔄 {n_original} WPs + {n_intermediate} intermedios = {n_total}"
-                self._mission_status_label.configure(text=msg, fg="#17a2b8")
-                detail = f"Ruta atraviesa obstáculos.\n\nWPs originales: {n_original}\nWPs intermedios: {n_intermediate}\nTotal: {n_total}"
-                self._mission_win.after(50, lambda d=detail: messagebox.showinfo("Path Planning", d, parent=self._mission_win))
-            except Exception as e:
-                msg = f"❌ Error: {e}"
-                self._mission_status_label.configure(text=msg, fg="#dc3545")
         else:
-            # Ruta inválida y auto_avoid desactivado
+            # Ruta inválida - cruza obstáculos
             msg = f"❌ {error}"
             self._mission_status_label.configure(text=msg, fg="#dc3545")
-            detail = f"{error}\n\nActiva 'Evitar obstáculos' o mueve waypoints"
+            detail = f"{error}\n\nMueve los waypoints para evitar los obstáculos."
             self._mission_win.after(50, lambda d=detail: messagebox.showerror("Ruta Inválida", d, parent=self._mission_win))
 
     def _execute_mission(self):
@@ -4746,48 +4856,100 @@ class MiniRemoteApp:
 
         # Obtener opciones
         return_home = self._mission_return_home_var.get() if hasattr(self, '_mission_return_home_var') else False
-        auto_avoid = self._mission_auto_avoid_var.get() if hasattr(self, '_mission_auto_avoid_var') else True
 
         # DEBUG: Mostrar información de validación
         print(f"[DEBUG] Waypoints: {len(self._mission_waypoints)}")
         print(f"[DEBUG] Obstáculos: {len(self._mission_exclusions)}")
         print(f"[DEBUG] Return home: {return_home}")
-        print(f"[DEBUG] Auto avoid: {auto_avoid}")
 
         # Validar rutas contra obstáculos (usa módulo tello_geometry)
         valid, error = validate_mission_paths(self._mission_waypoints, self._mission_exclusions, return_home)
         print(f"[DEBUG] Validación: valid={valid}, error={error}")
 
-        # Si hay obstáculos y auto_avoid está activado, planificar ruta alternativa
-        if not valid and auto_avoid and self._mission_exclusions:
-            print("[DEBUG] Ruta inválida, ejecutando path planning...")
-            # Usar path planning para evitar obstáculos
-            planned_wps = plan_mission_with_avoidance(
-                self._mission_waypoints, self._mission_exclusions, return_home
-            )
-            # Contar waypoints intermedios añadidos
-            n_intermediate = sum(1 for wp in planned_wps if wp.get('_intermediate', False))
-            print(f"[DEBUG] Path planning completado: {len(planned_wps)} waypoints totales, {n_intermediate} intermedios")
-            if n_intermediate > 0:
-                messagebox.showinfo("Path Planning",
-                    f"Se han añadido {n_intermediate} waypoints intermedios\n"
-                    f"para evitar obstáculos automáticamente.")
-            waypoints_to_execute = planned_wps
-        elif not valid:
-            print("[DEBUG] Ruta inválida y auto_avoid desactivado o sin obstáculos")
+        # Si la ruta no es válida, mostrar error y no ejecutar
+        if not valid:
+            print("[DEBUG] Ruta inválida - cruza obstáculos")
             messagebox.showerror("Ruta inválida",
-                f"⚠️ {error}\n\nReorganiza los waypoints o activa 'Evitar obstáculos automáticamente'.")
+                f"⚠️ {error}\n\nMueve los waypoints para evitar los obstáculos.")
             return
-        else:
-            print("[DEBUG] Ruta válida, usando waypoints originales")
-            waypoints_to_execute = self._mission_waypoints
+
+        waypoints_to_execute = self._mission_waypoints
 
         print(f"[DEBUG] Ejecutando misión con {len(waypoints_to_execute)} waypoints")
         print("[DEBUG] Waypoints a ejecutar:")
         for i, wp in enumerate(waypoints_to_execute):
-            is_intermediate = wp.get('_intermediate', False)
-            marker = " (INTERMEDIO)" if is_intermediate else ""
-            print(f"  [{i}] x={wp.get('x')}, y={wp.get('y')}, z={wp.get('z')}{marker}")
+            print(f"  [{i}] x={wp.get('x')}, y={wp.get('y')}, z={wp.get('z')}")
+
+        # ═══════════════════════════════════════════════════════════════
+        # CONFIRMACIÓN ANTES DE EJECUTAR
+        # ═══════════════════════════════════════════════════════════════
+        n_waypoints = len(self._mission_waypoints)
+        n_obstacles = len(self._mission_exclusions)
+
+        # Contar acciones
+        n_photos = sum(1 for wp in self._mission_waypoints if wp.get('photo', False))
+        n_videos = sum(1 for wp in self._mission_waypoints if wp.get('video', False))
+
+        confirm_msg = f"RESUMEN DE MISIÓN\n\n"
+        confirm_msg += f"📍 Waypoints: {n_waypoints}"
+        confirm_msg += f"\n🚧 Obstáculos: {n_obstacles}"
+        if n_photos > 0:
+            confirm_msg += f"\n📷 Fotos programadas: {n_photos}"
+        if n_videos > 0:
+            confirm_msg += f"\n🎥 Videos programados: {n_videos}"
+        confirm_msg += f"\n🏠 Volver a casa: {'Sí' if return_home else 'No'}"
+        confirm_msg += f"\n\n¿Iniciar misión?"
+
+        if not messagebox.askyesno("Confirmar Misión", confirm_msg, parent=self._mission_win):
+            return
+
+        # ═══════════════════════════════════════════════════════════════
+        # SINCRONIZAR OBSTÁCULOS CON GEOFENCE REAL (protección en tiempo real)
+        # ═══════════════════════════════════════════════════════════════
+        if self._mission_exclusions:
+            print(f"[DEBUG] Sincronizando {len(self._mission_exclusions)} obstáculos con geofence...")
+            try:
+                # Asegurar que existen las listas de exclusiones en el dron
+                if not hasattr(self.dron, "_gf_excl_circles"):
+                    self.dron._gf_excl_circles = []
+                if not hasattr(self.dron, "_gf_excl_polys"):
+                    self.dron._gf_excl_polys = []
+
+                # Convertir y añadir obstáculos del editor al geofence
+                for obs in self._mission_exclusions:
+                    obs_type = obs.get('type', 'circle')
+                    if obs_type == 'circle':
+                        gf_circle = {
+                            'cx': obs['cx'], 'cy': obs['cy'], 'r': obs['r'],
+                            'zmin': obs.get('zmin', 0), 'zmax': obs.get('zmax', 200)
+                        }
+                        self.dron._gf_excl_circles.append(gf_circle)
+                    elif obs_type == 'rect':
+                        # Convertir rectángulo a polígono de 4 puntos
+                        rect_poly = [
+                            (obs['x1'], obs['y1']), (obs['x2'], obs['y1']),
+                            (obs['x2'], obs['y2']), (obs['x1'], obs['y2'])
+                        ]
+                        gf_poly = {
+                            'poly': rect_poly,
+                            'zmin': obs.get('zmin', 0), 'zmax': obs.get('zmax', 200)
+                        }
+                        self.dron._gf_excl_polys.append(gf_poly)
+                    elif obs_type == 'poly':
+                        gf_poly = {
+                            'poly': obs['points'],
+                            'zmin': obs.get('zmin', 0), 'zmax': obs.get('zmax', 200)
+                        }
+                        self.dron._gf_excl_polys.append(gf_poly)
+
+                # Activar geofence si no está activo
+                if not getattr(self.dron, "_gf_enabled", False):
+                    setattr(self.dron, "_gf_enabled", True)
+                    print("[DEBUG] Geofence activado para protección de obstáculos")
+
+                print(f"[DEBUG] Sincronización completada: {len(self.dron._gf_excl_circles)} círculos, {len(self.dron._gf_excl_polys)} polígonos")
+            except Exception as e:
+                print(f"[DEBUG] Error sincronizando obstáculos: {e}")
 
         self._mission_running = True
         self._mission_status_label.configure(text="Estado: Ejecutando...", fg="#ffc107")
@@ -4844,8 +5006,8 @@ class MiniRemoteApp:
                 duration = float(wp.get('video_duration', 5) or 5)
 
                 try:
-                    # _start_recording ahora maneja todo: stream, espera de frames, hilo de grabación
-                    self._start_recording()
+                    # _start_recording con hilo dedicado para misiones (evita conflictos con FPV loop)
+                    self._start_recording(force_dedicated_thread=True)
 
                     # Esperar brevemente a que el hilo empiece a grabar
                     for i in range(20):  # Máximo 2 segundos

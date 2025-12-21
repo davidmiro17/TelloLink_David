@@ -12,9 +12,9 @@ _DEFAULT_SPEED = 50     # Velocidad por defecto en cm/s
 _TOL_XY_CM = 10         # Tolerancia horizontal
 _TOL_Z_CM = 15          # Tolerancia vertical
 
-
+#Función para rotar el dron hasta el angulo deseado
 def _rotate_to_yaw(self, target_yaw_deg: float) -> bool:
-    """Hace girar al dron hasta el ángulo deseado."""
+
     pose = getattr(self, "pose", None)
     curr = float(getattr(pose, "yaw_deg", 0.0) or 0.0) if pose else 0.0
     delta = (float(target_yaw_deg) - curr) % 360.0
@@ -37,16 +37,7 @@ def _rotate_to_yaw(self, target_yaw_deg: float) -> bool:
 
 
 def _world_to_local(dx_world: float, dy_world: float, yaw_deg: float) -> tuple:
-    """
-    Convierte desplazamiento del mundo a coordenadas locales del dron.
 
-    Sistema del dron (comando 'go x y z'):
-    - x: forward (+) / back (-)
-    - y: left (+) / right (-)
-
-    Sistema del mundo:
-    - yaw=0 → dron mira hacia +X
-    """
     yaw_rad = math.radians(yaw_deg)
     cos_y = math.cos(yaw_rad)
     sin_y = math.sin(yaw_rad)
@@ -59,18 +50,7 @@ def _world_to_local(dx_world: float, dy_world: float, yaw_deg: float) -> tuple:
 
 
 def _send_go_command(self, x_local: int, y_local: int, z: int, speed: int):
-    """
-    Envía el comando 'go x y z speed' al dron.
 
-    Args:
-        x_local: cm forward (+) / back (-)
-        y_local: cm left (+) / right (-)
-        z: cm up (+) / down (-)
-        speed: cm/s (10-100)
-
-    Returns:
-        tuple: (success: bool, wait_time: float) - si hay que esperar para completar
-    """
     # Asegurar que los valores estén en rango
     x_local = max(-_MAX_GO_CM, min(_MAX_GO_CM, x_local))
     y_local = max(-_MAX_GO_CM, min(_MAX_GO_CM, y_local))
@@ -101,9 +81,14 @@ def _send_go_command(self, x_local: int, y_local: int, z: int, speed: int):
             print(f"[goto] Respuesta numérica ({resp}), movimiento en progreso (~{wait_time:.1f}s)...")
             return (True, wait_time)
 
-        # Aceptar "ok" como éxito (movimiento ya completado)
+        # "ok" puede significar:
+        # 1. Comando aceptado y ejecutándose
+        # 2. Error silencioso donde el dron no se mueve
+        # Para asegurar que el movimiento se complete, siempre esperamos el tiempo estimado
         if resp_lower == "ok":
-            return (True, 0)
+            wait_time = max(0.5, estimated_time + 0.3)
+            print(f"[goto] Respuesta 'ok', esperando movimiento (~{wait_time:.1f}s)...")
+            return (True, wait_time)
 
         # Respuesta inesperada real
         print(f"[goto] Respuesta inesperada: {resp}")
@@ -140,9 +125,7 @@ def _goto_rel_worker_impl(self,
                           face_target: bool = False,
                           callback: Optional[Callable[..., Any]] = None,
                           params: Any = None) -> None:
-    """
-    Implementación real del worker de goto_rel.
-    """
+
     # Chequeos básicos previos
     if not hasattr(self, "pose") or self.pose is None:
         print("[goto] No hay PoseVirtual; abortando.")
@@ -273,7 +256,7 @@ def _goto_rel_worker_impl(self,
                         pass
                     time.sleep(update_interval)
 
-            # Asegurar posición final exacta
+            # Asegurar posición final, se suma lo que le ordenamos en el comando go
             try:
                 self.pose.x_cm = start_x + seg_dx
                 self.pose.y_cm = start_y + seg_dy

@@ -724,15 +724,6 @@ def calcular_distancia_peligro(x_dron, y_dron, z_dron,
             if dist_vertical > 0:
                 distancias.append(dist_vertical)
 
-        # CASO 3: Dron está encima del obstáculo y moviéndose horizontalmente hacia él
-        # Evitar que entre en el espacio XY del obstáculo si luego podría bajar
-        elif z_dron > c_zmax and not dentro_xy:
-            producto = vel_X_mundo * dx + vel_Y_mundo * dy
-            if producto > 0:
-                dist_al_borde = dist_al_centro - radio
-                if dist_al_borde > 0:
-                    distancias.append(dist_al_borde)
-
 
     # Exclusión (polígonos)
 
@@ -776,13 +767,6 @@ def calcular_distancia_peligro(x_dron, y_dron, z_dron,
             dist_vertical = z_dron - p_zmax
             if dist_vertical > 0:
                 distancias.append(dist_vertical)
-
-        # CASO 3: Dron está encima del obstáculo y moviéndose horizontalmente hacia él
-        elif z_dron > p_zmax and not dentro_xy:
-            producto = vel_X_mundo * dx + vel_Y_mundo * dy
-            if producto > 0 and dist_min_poly < float('inf'):
-                distancias.append(dist_min_poly)
-
 
 
     # Devolvemos la distancia mínima, es decir el peligro más cercano
@@ -985,6 +969,19 @@ def aplicar_geofence_rc(self, vx_joy, vy_joy, vz, yaw_joy):
             # Fuera por arriba - solo permitir movimiento hacia -Y
             if vel_Y_mundo > 0:
                 vel_Y_mundo = 0
+
+        # Verificar si estamos fuera en Z (altura)
+        z_min = float(limites.get("zmin", 0) or 0)
+        z_max = float(limites.get("zmax", 200) or 200)
+
+        if z_dron < z_min:
+            # Fuera por abajo - solo permitir subir
+            if vz < 0:
+                vz = 0
+        elif z_dron > z_max:
+            # Fuera por arriba - solo permitir bajar
+            if vz > 0:
+                vz = 0
 
     #Calcular distancia al peligro más cercano
     distancia = calcular_distancia_peligro(x_dron, y_dron, z_dron, vel_X_mundo, vel_Y_mundo, vz, limites, centro, circulos, poligonos)

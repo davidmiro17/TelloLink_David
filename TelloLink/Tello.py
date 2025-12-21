@@ -46,4 +46,4 @@ class TelloDron(object):
     from TelloLink.modules.tello_mission import run_mission, abort_mission
     from TelloLink.modules.tello_geofence import set_geofence, disable_geofence, recenter_geofence, add_exclusion_poly, add_exclusion_circle, clear_exclusions, aplicar_geofence_rc, set_layers, get_layers, get_current_layer, get_exclusion_layers, get_exclusions_for_layer, check_layer_change
     from TelloLink.modules.tello_session import start_flight_session, end_flight_session, get_session_photo_path, get_session_video_path, get_session_manager
-    from TelloLink.modules.tello_geometry import (line_intersects_circle, line_intersects_rect, line_intersects_polygon,line_intersects_obstacle, point_in_obstacle, point_in_polygon,validate_mission_paths, get_obstacle_description,plan_path_around_obstacles, plan_mission_with_avoidance)
+    from TelloLink.modules.tello_geometry import (line_intersects_circle, line_intersects_rect, line_intersects_polygon,line_intersects_obstacle, point_in_obstacle, point_in_polygon,validate_mission_paths, get_obstacle_description)

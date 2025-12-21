@@ -137,7 +137,7 @@ def _mission_worker(self,
 
         # Ejecuta el movimiento y manda el dron hacia el waypoint
         try:
-            # Nota: goto_rel ya maneja yaw opcional al inicio del movimiento
+
             # face_target hace que el dron rote para mirar hacia el destino antes de moverse
             self.goto_rel(dx_cm=dx, dy_cm=dy, dz_cm=dz, yaw_deg=yaw,
                          face_target=face_target, blocking=True)
@@ -145,10 +145,10 @@ def _mission_worker(self,
             print(f"[mission] Error en goto_rel de WP{idx}: {e}")
             break
 
-        # ═══════════════════════════════════════════════════════════════
+
         # EJECUTAR ACCIONES DEL WAYPOINT
-        # ═══════════════════════════════════════════════════════════════
-        original_wp = waypoints[idx - 1]  # waypoints original (idx empieza en 1)
+
+        original_wp = waypoints[idx - 1]  # waypoints pasado (idx empieza en 1)
 
         # Acción: FOTO
         if original_wp.get('photo', False):
