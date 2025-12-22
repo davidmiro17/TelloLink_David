@@ -39,6 +39,7 @@ except ImportError:
 from TelloLink.Tello import TelloDron
 from TelloLink import JoystickController
 from TelloLink.modules.tello_session import SessionManager, migrate_legacy_files
+from TelloLink.modules.tello_scenario import ScenarioManager, get_scenario_manager
 from TelloLink.modules.tello_geometry import (
     point_in_obstacle, validate_mission_paths
 )
@@ -129,6 +130,11 @@ class MiniRemoteApp:
         self._layer2_max_var = None
         self._layer3_min_var = None
         self._layer3_max_var = None
+
+        # Sistema de escenarios
+        self._scenario_manager = get_scenario_manager("escenarios")
+        self._current_scenario_id = None
+        self._scenario_combo = None
 
         # FPV
         self.fpv_label = None
@@ -1541,6 +1547,48 @@ class MiniRemoteApp:
         self._incl_zmax_var = tk.IntVar(value=120)
 
         # ═══════════════════════════════════════════════════════
+        # SECCIÓN: ESCENARIO
+        # ═══════════════════════════════════════════════════════
+        card_scenario_map = tk.Frame(side_panel, bg=BG_CARD, bd=1, relief="solid")
+        card_scenario_map.pack(fill="x", padx=4, pady=4)
+
+        tk.Label(card_scenario_map, text="  ESCENARIO", font=("Arial", 9, "bold"),
+                 bg=BG_HEADER, fg=FG_HEADER, anchor="w").pack(fill="x", ipady=4)
+
+        scenario_content_map = tk.Frame(card_scenario_map, bg=BG_CARD)
+        scenario_content_map.pack(fill="x", padx=8, pady=8)
+
+        # Combo para seleccionar escenario
+        scenario_row_map = tk.Frame(scenario_content_map, bg=BG_CARD)
+        scenario_row_map.pack(fill="x", pady=2)
+        tk.Label(scenario_row_map, text="Escenario:", bg=BG_CARD, font=("Arial", 8)).pack(side="left")
+
+        self._map_scenario_combo_var = tk.StringVar(value="")
+        self._map_scenario_combo = ttk.Combobox(scenario_row_map, textvariable=self._map_scenario_combo_var,
+                                                 width=15, state="readonly")
+        self._map_scenario_combo.pack(side="left", padx=4)
+
+        # Botón refrescar
+        tk.Button(scenario_row_map, text="↻", command=self._refresh_map_scenario_list,
+                  bg="#6c757d", fg="white", font=("Arial", 8), bd=0, width=2).pack(side="left", padx=2)
+
+        # Botones
+        scenario_btns_map = tk.Frame(scenario_content_map, bg=BG_CARD)
+        scenario_btns_map.pack(fill="x", pady=4)
+        tk.Button(scenario_btns_map, text="📂 Cargar", command=self._load_scenario_to_map,
+                  bg="#17a2b8", fg="white", font=("Arial", 8), bd=0).pack(side="left", fill="x", expand=True, padx=2)
+        tk.Button(scenario_btns_map, text="💾 Guardar", command=self._save_scenario_from_map,
+                  bg="#28a745", fg="white", font=("Arial", 8), bd=0).pack(side="left", fill="x", expand=True, padx=2)
+
+        # Nombre del escenario
+        self._map_scenario_name_var = tk.StringVar(value="(ninguno)")
+        tk.Label(scenario_content_map, textvariable=self._map_scenario_name_var, bg=BG_CARD,
+                 font=("Arial", 8, "italic"), fg="#666").pack(anchor="w", pady=2)
+
+        # Refrescar lista
+        self._refresh_map_scenario_list()
+
+        # ═══════════════════════════════════════════════════════
         # SECCIÓN: EDITAR OBSTÁCULO SELECCIONADO
         # ═══════════════════════════════════════════════════════
         card_obs_edit = tk.Frame(side_panel, bg=BG_CARD, bd=1, relief="solid")
@@ -2885,14 +2933,39 @@ class MiniRemoteApp:
         filter_content = tk.Frame(filter_card, bg=BG_CARD)
         filter_content.pack(fill="x", padx=8, pady=8)
 
+        # Filtro por escenario
+        tk.Label(filter_content, text="Escenario:", bg=BG_CARD, font=("Arial", 8)).pack(anchor="w")
+        self._gallery_scenario_filter = tk.StringVar(value="todos")
+        self._gallery_scenario_combo = ttk.Combobox(filter_content, textvariable=self._gallery_scenario_filter,
+                                                     width=20, state="readonly")
+        self._gallery_scenario_combo.pack(fill="x", pady=(2, 8))
+        self._gallery_scenario_combo.bind("<<ComboboxSelected>>", lambda e: self._gallery_refresh())
+
+        # Filtro por tipo de vuelo
+        tk.Label(filter_content, text="Tipo de vuelo:", bg=BG_CARD, font=("Arial", 8)).pack(anchor="w")
+        self._gallery_type_filter = tk.StringVar(value="todos")
+        type_frame = tk.Frame(filter_content, bg=BG_CARD)
+        type_frame.pack(fill="x", pady=(2, 8))
+        tk.Radiobutton(type_frame, text="Todos", variable=self._gallery_type_filter, value="todos",
+                       bg=BG_CARD, activebackground=BG_CARD, font=("Arial", 8),
+                       command=self._gallery_refresh).pack(side="left")
+        tk.Radiobutton(type_frame, text="Plan", variable=self._gallery_type_filter, value="plan",
+                       bg=BG_CARD, activebackground=BG_CARD, font=("Arial", 8),
+                       command=self._gallery_refresh).pack(side="left")
+        tk.Radiobutton(type_frame, text="Manual", variable=self._gallery_type_filter, value="manual",
+                       bg=BG_CARD, activebackground=BG_CARD, font=("Arial", 8),
+                       command=self._gallery_refresh).pack(side="left")
+
+        # Filtro por tipo de media
+        tk.Label(filter_content, text="Contenido:", bg=BG_CARD, font=("Arial", 8)).pack(anchor="w", pady=(4, 0))
         tk.Radiobutton(filter_content, text="📁 Todo", variable=self._gallery_filter, value="all",
-                       bg=BG_CARD, activebackground=BG_CARD, font=("Arial", 10),
+                       bg=BG_CARD, activebackground=BG_CARD, font=("Arial", 9),
                        command=self._gallery_apply_filter).pack(anchor="w")
         tk.Radiobutton(filter_content, text="📷 Solo fotos", variable=self._gallery_filter, value="photos",
-                       bg=BG_CARD, activebackground=BG_CARD, font=("Arial", 10),
+                       bg=BG_CARD, activebackground=BG_CARD, font=("Arial", 9),
                        command=self._gallery_apply_filter).pack(anchor="w")
         tk.Radiobutton(filter_content, text="🎬 Solo vídeos", variable=self._gallery_filter, value="videos",
-                       bg=BG_CARD, activebackground=BG_CARD, font=("Arial", 10),
+                       bg=BG_CARD, activebackground=BG_CARD, font=("Arial", 9),
                        command=self._gallery_apply_filter).pack(anchor="w")
 
         # Botón refrescar
@@ -2940,10 +3013,21 @@ class MiniRemoteApp:
         self._gallery_refresh()
 
     def _gallery_refresh(self):
-        """Refresca la lista de sesiones."""
+        """Refresca la lista de sesiones con filtros."""
         for widget in self._sessions_frame.winfo_children():
             widget.destroy()
 
+        # Actualizar combo de escenarios
+        scenarios = self._scenario_manager.list_scenarios()
+        scenario_names = ["(Todos)"] + [s['nombre'] for s in scenarios]
+        self._gallery_scenarios_data = {s['nombre']: s['id'] for s in scenarios}
+
+        if hasattr(self, '_gallery_scenario_combo') and self._gallery_scenario_combo:
+            self._gallery_scenario_combo['values'] = scenario_names
+            if not self._gallery_scenario_filter.get() or self._gallery_scenario_filter.get() == "todos":
+                self._gallery_scenario_filter.set("(Todos)")
+
+        # Obtener sesiones
         sessions = self._session_manager.list_sessions()
 
         if not sessions:
@@ -2951,7 +3035,32 @@ class MiniRemoteApp:
                      font=("Arial", 9, "italic"), fg="#888", bg="#f8f9fa").pack(pady=20)
             return
 
+        # Aplicar filtros
+        scenario_filter = self._gallery_scenario_filter.get() if hasattr(self, '_gallery_scenario_filter') else "(Todos)"
+        type_filter = self._gallery_type_filter.get() if hasattr(self, '_gallery_type_filter') else "todos"
+
+        filtered_sessions = []
         for session in sessions:
+            # Filtrar por escenario
+            if scenario_filter != "(Todos)":
+                scenario_id = self._gallery_scenarios_data.get(scenario_filter)
+                if session.get("escenario_id") != scenario_id:
+                    continue
+
+            # Filtrar por tipo
+            if type_filter != "todos":
+                session_type = session.get("tipo", "manual")
+                if session_type != type_filter:
+                    continue
+
+            filtered_sessions.append(session)
+
+        if not filtered_sessions:
+            tk.Label(self._sessions_frame, text="No hay sesiones\ncon estos filtros",
+                     font=("Arial", 9, "italic"), fg="#888", bg="#f8f9fa").pack(pady=20)
+            return
+
+        for session in filtered_sessions:
             self._create_session_item(session)
 
     def _create_session_item(self, session):
@@ -2959,6 +3068,8 @@ class MiniRemoteApp:
         session_id = session["id"]
         photos = session["photos_count"]
         videos = session["videos_count"]
+        escenario_id = session.get("escenario_id", "")
+        tipo = session.get("tipo", "manual")
 
         if session_id == "legacy":
             date_str = "📦 Archivos antiguos"
@@ -2977,6 +3088,14 @@ class MiniRemoteApp:
 
         tk.Label(item_frame, text=date_str, font=("Arial", 9, "bold"),
                  bg=bg_color, fg="#333", anchor="w").pack(fill="x", padx=6, pady=(4, 0))
+
+        # Mostrar escenario y tipo
+        tipo_icon = "📋" if tipo == "plan" else "🎮"
+        tipo_text = "Plan" if tipo == "plan" else "Manual"
+        escenario_text = escenario_id if escenario_id else "(sin escenario)"
+        tk.Label(item_frame, text=f"{tipo_icon} {tipo_text}  •  {escenario_text}",
+                 font=("Arial", 7), bg=bg_color, fg="#888", anchor="w").pack(fill="x", padx=6)
+
         tk.Label(item_frame, text=f"📷 {photos}  🎬 {videos}",
                  font=("Arial", 8), bg=bg_color, fg="#666", anchor="w").pack(fill="x", padx=6, pady=(0, 4))
 
@@ -3505,6 +3624,49 @@ class MiniRemoteApp:
                   bg="#6c757d", fg="white", font=("Arial", 8), bd=0).pack(side="left", padx=2)
         tk.Button(obs_btn_row, text="🗑 Último obs", command=self._delete_last_obstacle,
                   bg="#dc3545", fg="white", font=("Arial", 8), bd=0).pack(side="left", padx=2)
+
+        # ═══════════════════════════════════════════════════════════════════
+        # SECCIÓN: ESCENARIO
+        # ═══════════════════════════════════════════════════════════════════
+        card_scenario = tk.Frame(side_panel, bg=BG_CARD, bd=1, relief="solid")
+        card_scenario.pack(fill="x", padx=4, pady=4)
+
+        tk.Label(card_scenario, text="  ESCENARIO", font=("Arial", 9, "bold"),
+                 bg=BG_HEADER, fg=FG_HEADER, anchor="w").pack(fill="x", ipady=4)
+
+        scenario_content = tk.Frame(card_scenario, bg=BG_CARD)
+        scenario_content.pack(fill="x", padx=8, pady=8)
+
+        # Combo para seleccionar escenario
+        scenario_row1 = tk.Frame(scenario_content, bg=BG_CARD)
+        scenario_row1.pack(fill="x", pady=2)
+        tk.Label(scenario_row1, text="Escenario:", bg=BG_CARD, font=("Arial", 8)).pack(side="left")
+
+        self._scenario_combo_var = tk.StringVar(value="")
+        self._scenario_combo = ttk.Combobox(scenario_row1, textvariable=self._scenario_combo_var,
+                                            width=18, state="readonly")
+        self._scenario_combo.pack(side="left", padx=4)
+        self._scenario_combo.bind("<<ComboboxSelected>>", self._on_scenario_selected)
+
+        # Botón refrescar lista
+        tk.Button(scenario_row1, text="↻", command=self._refresh_scenario_list,
+                  bg="#6c757d", fg="white", font=("Arial", 8), bd=0, width=2).pack(side="left", padx=2)
+
+        # Botones de escenario
+        scenario_btns = tk.Frame(scenario_content, bg=BG_CARD)
+        scenario_btns.pack(fill="x", pady=4)
+        tk.Button(scenario_btns, text="📂 Cargar", command=self._load_scenario_to_editor,
+                  bg="#17a2b8", fg="white", font=("Arial", 8), bd=0).pack(side="left", fill="x", expand=True, padx=2)
+        tk.Button(scenario_btns, text="💾 Guardar", command=self._save_scenario_from_editor,
+                  bg="#28a745", fg="white", font=("Arial", 8), bd=0).pack(side="left", fill="x", expand=True, padx=2)
+
+        # Nombre del escenario actual
+        self._scenario_name_var = tk.StringVar(value="(ninguno)")
+        tk.Label(scenario_content, textvariable=self._scenario_name_var, bg=BG_CARD,
+                 font=("Arial", 8, "italic"), fg="#666").pack(anchor="w", pady=2)
+
+        # Refrescar lista al inicio
+        self._refresh_scenario_list()
 
         # ═══════════════════════════════════════════════════════════════════
         # SECCIÓN: EDITAR OBSTÁCULO SELECCIONADO
@@ -4652,6 +4814,340 @@ class MiniRemoteApp:
         except Exception as e:
             messagebox.showerror("Plantilla Misión", f"Error cargando: {e}")
 
+    # =========================================================================
+    # MÉTODOS DE ESCENARIO
+    # =========================================================================
+
+    def _refresh_scenario_list(self):
+        """Refresca la lista de escenarios disponibles."""
+        scenarios = self._scenario_manager.list_scenarios()
+        names = [s['nombre'] for s in scenarios]
+        self._scenario_list = scenarios
+
+        if hasattr(self, '_scenario_combo') and self._scenario_combo:
+            self._scenario_combo['values'] = names
+            if names and not self._scenario_combo_var.get():
+                self._scenario_combo_var.set(names[0])
+
+    def _on_scenario_selected(self, event=None):
+        """Maneja selección de escenario en el combo."""
+        pass  # Solo informativo, cargar con botón
+
+    def _load_scenario_to_editor(self):
+        """Carga el escenario seleccionado al editor."""
+        if not hasattr(self, '_scenario_list') or not self._scenario_list:
+            messagebox.showwarning("Escenario", "No hay escenarios disponibles.")
+            return
+
+        selected_name = self._scenario_combo_var.get()
+        scenario = None
+        for s in self._scenario_list:
+            if s['nombre'] == selected_name:
+                scenario = self._scenario_manager.load_scenario(s['id'])
+                break
+
+        if not scenario:
+            messagebox.showwarning("Escenario", "No se pudo cargar el escenario.")
+            return
+
+        self._current_scenario_id = scenario.get('id')
+        self._scenario_name_var.set(f"Cargado: {scenario.get('nombre', 'Sin nombre')}")
+
+        # Cargar geofence
+        gf = scenario.get('geofence', {})
+        if gf and hasattr(self, '_mgf_x1'):
+            self._mgf_x1.set(int(gf.get('x1', -100)))
+            self._mgf_y1.set(int(gf.get('y1', -100)))
+            self._mgf_x2.set(int(gf.get('x2', 100)))
+            self._mgf_y2.set(int(gf.get('y2', 100)))
+            self._mgf_zmin.set(int(gf.get('zmin', 0)))
+            self._mgf_zmax.set(int(gf.get('zmax', 200)))
+            self._mission_geofence = gf
+
+        # Cargar capas
+        capas = scenario.get('capas', {})
+        if capas:
+            if hasattr(self, '_layer1_max_var') and self._layer1_max_var:
+                self._layer1_max_var.set(int(capas.get('c1_max', 60)))
+            if hasattr(self, '_layer2_max_var') and self._layer2_max_var:
+                self._layer2_max_var.set(int(capas.get('c2_max', 120)))
+            if hasattr(self, '_layer3_max_var') and self._layer3_max_var:
+                self._layer3_max_var.set(int(capas.get('c3_max', 200)))
+
+        # Cargar obstáculos
+        obs = scenario.get('obstaculos', {})
+        self._mission_exclusions = []
+
+        # Círculos
+        for c in obs.get('circles', []):
+            self._mission_exclusions.append({
+                'type': 'circle',
+                'cx': c.get('cx', 0),
+                'cy': c.get('cy', 0),
+                'r': c.get('r', 30),
+                'zmin': c.get('zmin', 0),
+                'zmax': c.get('zmax', 60),
+                'nombre': c.get('nombre', '')
+            })
+
+        # Polígonos
+        for p in obs.get('polygons', []):
+            self._mission_exclusions.append({
+                'type': 'polygon',
+                'points': p.get('poly', []),
+                'zmin': p.get('zmin', 0),
+                'zmax': p.get('zmax', 60),
+                'nombre': p.get('nombre', '')
+            })
+
+        # Redibujar mapa
+        if hasattr(self, '_draw_mission_map'):
+            self._draw_mission_map()
+
+        messagebox.showinfo("Escenario", f"Escenario '{scenario.get('nombre')}' cargado.")
+
+    def _save_scenario_from_editor(self):
+        """Guarda el estado actual del editor como escenario."""
+        # Diálogo para ID y nombre
+        dialog = tk.Toplevel(self._mission_win)
+        dialog.title("Guardar Escenario")
+        dialog.geometry("300x150")
+        dialog.transient(self._mission_win)
+        dialog.grab_set()
+
+        tk.Label(dialog, text="ID (sin espacios):").pack(pady=(10, 2))
+        id_var = tk.StringVar(value=self._current_scenario_id or "nuevo_escenario")
+        tk.Entry(dialog, textvariable=id_var, width=30).pack()
+
+        tk.Label(dialog, text="Nombre:").pack(pady=(10, 2))
+        name_var = tk.StringVar(value="Nuevo Escenario")
+        tk.Entry(dialog, textvariable=name_var, width=30).pack()
+
+        def do_save():
+            scenario_id = id_var.get().strip().replace(" ", "_")
+            nombre = name_var.get().strip() or scenario_id
+
+            if not scenario_id:
+                messagebox.showwarning("Error", "ID no puede estar vacío.")
+                return
+
+            # Construir geofence
+            geofence = {
+                'x1': self._mgf_x1.get() if hasattr(self, '_mgf_x1') else -100,
+                'y1': self._mgf_y1.get() if hasattr(self, '_mgf_y1') else -100,
+                'x2': self._mgf_x2.get() if hasattr(self, '_mgf_x2') else 100,
+                'y2': self._mgf_y2.get() if hasattr(self, '_mgf_y2') else 100,
+                'zmin': self._mgf_zmin.get() if hasattr(self, '_mgf_zmin') else 0,
+                'zmax': self._mgf_zmax.get() if hasattr(self, '_mgf_zmax') else 200
+            }
+
+            # Construir capas
+            capas = {
+                'c1_max': self._layer1_max_var.get() if self._layer1_max_var else 60,
+                'c2_max': self._layer2_max_var.get() if self._layer2_max_var else 120,
+                'c3_max': self._layer3_max_var.get() if self._layer3_max_var else 200
+            }
+
+            # Construir obstáculos
+            circles = []
+            polygons = []
+            for exc in self._mission_exclusions:
+                if exc.get('type') == 'circle':
+                    circles.append({
+                        'cx': exc.get('cx', 0),
+                        'cy': exc.get('cy', 0),
+                        'r': exc.get('r', 30),
+                        'zmin': exc.get('zmin', 0),
+                        'zmax': exc.get('zmax', 60),
+                        'nombre': exc.get('nombre', '')
+                    })
+                elif exc.get('type') in ('polygon', 'rect'):
+                    polygons.append({
+                        'poly': exc.get('points', []),
+                        'zmin': exc.get('zmin', 0),
+                        'zmax': exc.get('zmax', 60),
+                        'nombre': exc.get('nombre', '')
+                    })
+
+            obstaculos = {'circles': circles, 'polygons': polygons}
+
+            # Crear o actualizar escenario
+            self._scenario_manager.create_scenario(scenario_id, nombre, geofence, capas, obstaculos)
+
+            # Si hay waypoints, guardarlos como plan de vuelo
+            if self._mission_waypoints:
+                self._scenario_manager.add_flight_plan(
+                    scenario_id,
+                    "plan_editor",
+                    "Plan desde Editor",
+                    self._mission_waypoints,
+                    return_home=False
+                )
+
+            self._current_scenario_id = scenario_id
+            self._scenario_name_var.set(f"Guardado: {nombre}")
+            self._refresh_scenario_list()
+
+            dialog.destroy()
+            messagebox.showinfo("Escenario", f"Escenario '{nombre}' guardado.")
+
+        tk.Button(dialog, text="Guardar", command=do_save, bg="#28a745", fg="white").pack(pady=15)
+
+    # =========================================================================
+    # MÉTODOS DE ESCENARIO PARA MAPA (modo RC)
+    # =========================================================================
+
+    def _refresh_map_scenario_list(self):
+        """Refresca la lista de escenarios en ventana Mapa."""
+        scenarios = self._scenario_manager.list_scenarios()
+        names = [s['nombre'] for s in scenarios]
+        self._map_scenario_list = scenarios
+
+        if hasattr(self, '_map_scenario_combo') and self._map_scenario_combo:
+            self._map_scenario_combo['values'] = names
+            if names and not self._map_scenario_combo_var.get():
+                self._map_scenario_combo_var.set(names[0])
+
+    def _load_scenario_to_map(self):
+        """Carga escenario al mapa (modo RC)."""
+        if not hasattr(self, '_map_scenario_list') or not self._map_scenario_list:
+            messagebox.showwarning("Escenario", "No hay escenarios disponibles.")
+            return
+
+        selected_name = self._map_scenario_combo_var.get()
+        scenario = None
+        for s in self._map_scenario_list:
+            if s['nombre'] == selected_name:
+                scenario = self._scenario_manager.load_scenario(s['id'])
+                break
+
+        if not scenario:
+            messagebox.showwarning("Escenario", "No se pudo cargar el escenario.")
+            return
+
+        self._current_scenario_id = scenario.get('id')
+        self._map_scenario_name_var.set(f"Cargado: {scenario.get('nombre', 'Sin nombre')}")
+
+        # Cargar geofence a las variables principales
+        gf = scenario.get('geofence', {})
+        if gf:
+            self.gf_x1_var.set(str(int(gf.get('x1', -100))))
+            self.gf_y1_var.set(str(int(gf.get('y1', -100))))
+            self.gf_x2_var.set(str(int(gf.get('x2', 100))))
+            self.gf_y2_var.set(str(int(gf.get('y2', 100))))
+            self.gf_zmin_var.set(str(int(gf.get('zmin', 0))))
+            self.gf_zmax_var.set(str(int(gf.get('zmax', 200))))
+
+            # También en inclusión local
+            if hasattr(self, '_incl_zmin_var') and self._incl_zmin_var:
+                self._incl_zmin_var.set(int(gf.get('zmin', 0)))
+            if hasattr(self, '_incl_zmax_var') and self._incl_zmax_var:
+                self._incl_zmax_var.set(int(gf.get('zmax', 200)))
+
+            # Guardar rectángulo de inclusión
+            self._incl_rect = {
+                'x1': gf.get('x1', -100), 'y1': gf.get('y1', -100),
+                'x2': gf.get('x2', 100), 'y2': gf.get('y2', 100),
+                'zmin': gf.get('zmin', 0), 'zmax': gf.get('zmax', 200)
+            }
+
+        # Cargar capas
+        capas = scenario.get('capas', {})
+        if capas:
+            if hasattr(self, '_layer1_max_var') and self._layer1_max_var:
+                self._layer1_max_var.set(int(capas.get('c1_max', 60)))
+            if hasattr(self, '_layer2_max_var') and self._layer2_max_var:
+                self._layer2_max_var.set(int(capas.get('c2_max', 120)))
+            if hasattr(self, '_layer3_max_var') and self._layer3_max_var:
+                self._layer3_max_var.set(int(capas.get('c3_max', 200)))
+
+        # Cargar obstáculos
+        obs = scenario.get('obstaculos', {})
+        self._excl_circles = []
+        self._excl_polys = []
+
+        for c in obs.get('circles', []):
+            self._excl_circles.append({
+                'cx': c.get('cx', 0), 'cy': c.get('cy', 0), 'r': c.get('r', 30),
+                'zmin': c.get('zmin', 0), 'zmax': c.get('zmax', 60)
+            })
+
+        for p in obs.get('polygons', []):
+            self._excl_polys.append({
+                'points': p.get('poly', []),
+                'zmin': p.get('zmin', 0), 'zmax': p.get('zmax', 60)
+            })
+
+        # Redibujar mapa
+        if hasattr(self, '_draw_map'):
+            self._draw_map()
+
+        messagebox.showinfo("Escenario", f"Escenario '{scenario.get('nombre')}' cargado.")
+
+    def _save_scenario_from_map(self):
+        """Guarda el estado actual del mapa como escenario."""
+        dialog = tk.Toplevel(self._map_win)
+        dialog.title("Guardar Escenario")
+        dialog.geometry("300x150")
+        dialog.transient(self._map_win)
+        dialog.grab_set()
+
+        tk.Label(dialog, text="ID (sin espacios):").pack(pady=(10, 2))
+        id_var = tk.StringVar(value=self._current_scenario_id or "nuevo_escenario")
+        tk.Entry(dialog, textvariable=id_var, width=30).pack()
+
+        tk.Label(dialog, text="Nombre:").pack(pady=(10, 2))
+        name_var = tk.StringVar(value="Nuevo Escenario")
+        tk.Entry(dialog, textvariable=name_var, width=30).pack()
+
+        def do_save():
+            scenario_id = id_var.get().strip().replace(" ", "_")
+            nombre = name_var.get().strip() or scenario_id
+
+            if not scenario_id:
+                messagebox.showwarning("Error", "ID no puede estar vacío.")
+                return
+
+            # Construir geofence desde _incl_rect o variables
+            if self._incl_rect:
+                geofence = self._incl_rect.copy()
+            else:
+                geofence = {
+                    'x1': int(self.gf_x1_var.get() or -100),
+                    'y1': int(self.gf_y1_var.get() or -100),
+                    'x2': int(self.gf_x2_var.get() or 100),
+                    'y2': int(self.gf_y2_var.get() or 100),
+                    'zmin': int(self.gf_zmin_var.get() or 0),
+                    'zmax': int(self.gf_zmax_var.get() or 200)
+                }
+
+            # Capas
+            capas = {
+                'c1_max': self._layer1_max_var.get() if self._layer1_max_var else 60,
+                'c2_max': self._layer2_max_var.get() if self._layer2_max_var else 120,
+                'c3_max': self._layer3_max_var.get() if self._layer3_max_var else 200
+            }
+
+            # Obstáculos
+            circles = [{'cx': c['cx'], 'cy': c['cy'], 'r': c['r'],
+                        'zmin': c.get('zmin', 0), 'zmax': c.get('zmax', 60)}
+                       for c in self._excl_circles]
+            polygons = [{'poly': p['points'], 'zmin': p.get('zmin', 0), 'zmax': p.get('zmax', 60)}
+                        for p in self._excl_polys]
+
+            obstaculos = {'circles': circles, 'polygons': polygons}
+
+            self._scenario_manager.create_scenario(scenario_id, nombre, geofence, capas, obstaculos)
+
+            self._current_scenario_id = scenario_id
+            self._map_scenario_name_var.set(f"Guardado: {nombre}")
+            self._refresh_map_scenario_list()
+
+            dialog.destroy()
+            messagebox.showinfo("Escenario", f"Escenario '{nombre}' guardado.")
+
+        tk.Button(dialog, text="Guardar", command=do_save, bg="#28a745", fg="white").pack(pady=15)
+
     def _mission_apply_geofence(self):
         """Aplica el geofence configurado."""
         self._mission_geofence = {
@@ -4950,6 +5446,17 @@ class MiniRemoteApp:
                 print(f"[DEBUG] Sincronización completada: {len(self.dron._gf_excl_circles)} círculos, {len(self.dron._gf_excl_polys)} polígonos")
             except Exception as e:
                 print(f"[DEBUG] Error sincronizando obstáculos: {e}")
+
+        # ═══════════════════════════════════════════════════════════════
+        # REGISTRAR ESCENARIO EN LA SESIÓN
+        # ═══════════════════════════════════════════════════════════════
+        if self._session_manager.is_session_active():
+            if self._current_scenario_id:
+                self._session_manager._session_data["escenario_id"] = self._current_scenario_id
+                self._session_manager._session_data["tipo"] = "plan"
+                self._session_manager._session_data["plan_id"] = "mission_editor"
+                self._session_manager._save_session_metadata()
+                print(f"[Session] Escenario registrado: {self._current_scenario_id}")
 
         self._mission_running = True
         self._mission_status_label.configure(text="Estado: Ejecutando...", fg="#ffc107")

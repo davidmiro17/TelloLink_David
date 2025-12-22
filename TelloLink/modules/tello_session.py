@@ -18,8 +18,17 @@ class SessionManager:
         if not os.path.exists(self.base_dir):
             os.makedirs(self.base_dir)
 
-    def start_session(self) -> str:
+    def start_session(self, escenario_id: Optional[str] = None,
+                       plan_id: Optional[str] = None,
+                       tipo: str = "manual") -> str:
+        """
+        Inicia una nueva sesión de vuelo.
 
+        Args:
+            escenario_id: ID del escenario (sala) donde se vuela
+            plan_id: ID del plan de vuelo (None si es vuelo manual)
+            tipo: "plan" o "manual"
+        """
         timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         session_path = os.path.join(self.base_dir, timestamp)
 
@@ -32,6 +41,9 @@ class SessionManager:
         self._session_data = {
             "start_time": datetime.now().isoformat(),
             "end_time": None,
+            "escenario_id": escenario_id,
+            "tipo": tipo,
+            "plan_id": plan_id,
             "drone_connected": True,
             "takeoffs": 0,
             "total_flight_time_sec": 0,
@@ -146,6 +158,9 @@ class SessionManager:
                 "path": session_path,
                 "start_time": metadata.get("start_time", folder),
                 "end_time": metadata.get("end_time"),
+                "escenario_id": metadata.get("escenario_id"),
+                "tipo": metadata.get("tipo", "manual"),
+                "plan_id": metadata.get("plan_id"),
                 "takeoffs": metadata.get("takeoffs", 0),
                 "photos_count": photos_count,
                 "videos_count": videos_count,
@@ -221,6 +236,50 @@ class SessionManager:
         except OSError:
             pass
         return False
+
+    # =========================================================================
+    # MÉTODOS PARA FILTRAR POR ESCENARIO/PLAN
+    # =========================================================================
+
+    def list_sessions_by_scenario(self, escenario_id: str) -> List[Dict[str, Any]]:
+        """Lista sesiones filtradas por escenario."""
+        all_sessions = self.list_sessions()
+        return [s for s in all_sessions if s.get("escenario_id") == escenario_id]
+
+    def list_sessions_by_plan(self, escenario_id: str, plan_id: str) -> List[Dict[str, Any]]:
+        """Lista sesiones de un plan de vuelo específico."""
+        all_sessions = self.list_sessions()
+        return [
+            s for s in all_sessions
+            if s.get("escenario_id") == escenario_id and s.get("plan_id") == plan_id
+        ]
+
+    def list_manual_sessions(self, escenario_id: str) -> List[Dict[str, Any]]:
+        """Lista sesiones de vuelo manual de un escenario."""
+        all_sessions = self.list_sessions()
+        return [
+            s for s in all_sessions
+            if s.get("escenario_id") == escenario_id and s.get("tipo") == "manual"
+        ]
+
+    def get_scenario_stats(self, escenario_id: str) -> Dict[str, Any]:
+        """Obtiene estadísticas de un escenario."""
+        sessions = self.list_sessions_by_scenario(escenario_id)
+
+        total_photos = sum(s.get("photos_count", 0) for s in sessions)
+        total_videos = sum(s.get("videos_count", 0) for s in sessions)
+        total_flights = len(sessions)
+        plan_sessions = [s for s in sessions if s.get("tipo") == "plan"]
+        manual_sessions = [s for s in sessions if s.get("tipo") == "manual"]
+
+        return {
+            "escenario_id": escenario_id,
+            "total_sessions": total_flights,
+            "plan_sessions": len(plan_sessions),
+            "manual_sessions": len(manual_sessions),
+            "total_photos": total_photos,
+            "total_videos": total_videos
+        }
 
 
 # =============================================================================
