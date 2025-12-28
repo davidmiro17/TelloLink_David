@@ -1518,19 +1518,38 @@ class MiniRemoteApp:
                  justify="center").pack(side="left", padx=4)
         tk.Label(radio_frame, text="cm", bg=BG_CARD, font=("Arial", 8)).pack(side="left")
 
-        # Selector de capa
-        self._draw_layer_var = tk.StringVar(value="1")
-        self._draw_layer_var.trace_add("write", self._on_draw_layer_change)
+        # Selector de capas con checkboxes (permite combinaciones libres)
+        self._draw_layer_c1 = tk.BooleanVar(value=True)
+        self._draw_layer_c2 = tk.BooleanVar(value=False)
+        self._draw_layer_c3 = tk.BooleanVar(value=False)
 
-        tk.Label(content1, text="Capa:", bg=BG_CARD, font=("Arial", 8)).pack(anchor="w")
+        tk.Label(content1, text="Capas del obstáculo:", bg=BG_CARD, font=("Arial", 8)).pack(anchor="w")
         layer_btn_frame = tk.Frame(content1, bg=BG_CARD)
         layer_btn_frame.pack(fill="x", pady=2)
 
-        for val, color, txt in [("1", layer_colors[0], "C1"), ("2", layer_colors[1], "C2"),
-                                 ("3", layer_colors[2], "C3"), ("all", "#6c757d", "ALL")]:
-            tk.Radiobutton(layer_btn_frame, text=txt, variable=self._draw_layer_var, value=val,
-                           bg=color, fg="white", selectcolor=color, activebackground=color,
-                           indicatoron=0, width=4, font=("Arial", 8, "bold")).pack(side="left", padx=1)
+        tk.Checkbutton(layer_btn_frame, text="C1", variable=self._draw_layer_c1,
+                       bg=layer_colors[0], fg="white", selectcolor=layer_colors[0],
+                       activebackground=layer_colors[0], font=("Arial", 8, "bold"),
+                       indicatoron=0, width=3, command=self._on_draw_layer_change).pack(side="left", padx=1)
+        tk.Checkbutton(layer_btn_frame, text="C2", variable=self._draw_layer_c2,
+                       bg=layer_colors[1], fg="white", selectcolor=layer_colors[1],
+                       activebackground=layer_colors[1], font=("Arial", 8, "bold"),
+                       indicatoron=0, width=3, command=self._on_draw_layer_change).pack(side="left", padx=1)
+        tk.Checkbutton(layer_btn_frame, text="C3", variable=self._draw_layer_c3,
+                       bg=layer_colors[2], fg="white", selectcolor=layer_colors[2],
+                       activebackground=layer_colors[2], font=("Arial", 8, "bold"),
+                       indicatoron=0, width=3, command=self._on_draw_layer_change).pack(side="left", padx=1)
+
+        # Botón "Todas" para marcar/desmarcar todas
+        def toggle_all_layers():
+            all_on = self._draw_layer_c1.get() and self._draw_layer_c2.get() and self._draw_layer_c3.get()
+            self._draw_layer_c1.set(not all_on)
+            self._draw_layer_c2.set(not all_on)
+            self._draw_layer_c3.set(not all_on)
+            self._on_draw_layer_change()  # Actualizar indicador
+
+        tk.Button(layer_btn_frame, text="ALL", command=toggle_all_layers,
+                  bg="#6c757d", fg="white", font=("Arial", 8, "bold"), bd=0, width=4).pack(side="left", padx=1)
 
         # Botones de acción
         btn_row = tk.Frame(content1, bg=BG_CARD)
@@ -1631,6 +1650,12 @@ class MiniRemoteApp:
                   bg="#28a745", fg="white", font=("Arial", 8, "bold"), bd=0, padx=8).pack(side="left", padx=2)
         tk.Button(obs_edit_btns, text="🗑 Eliminar", command=self._map_delete_selected_obs,
                   bg="#dc3545", fg="white", font=("Arial", 8, "bold"), bd=0, padx=8).pack(side="left", padx=2)
+
+        # Botón duplicar a capa (usa los checkboxes de capa seleccionados)
+        obs_edit_btns2 = tk.Frame(obs_edit_content, bg=BG_CARD)
+        obs_edit_btns2.pack(fill="x", pady=(4, 0))
+        tk.Button(obs_edit_btns2, text="📋 Duplicar a capa seleccionada", command=self._map_duplicate_obs_to_layer,
+                  bg="#9b59b6", fg="white", font=("Arial", 8, "bold"), bd=0).pack(fill="x")
 
         # Variable para obstáculo seleccionado en mapa
         self._map_selected_obs_idx = None
@@ -1771,41 +1796,13 @@ class MiniRemoteApp:
             self._layer2_range_var.set(f"{c1} - {c2} cm")
             self._layer3_range_var.set(f"{c2} - {c3} cm")
 
-            # Actualizar también el indicador de la esquina
-            if self._layer_label and self._draw_layer_var:
-                layer = self._draw_layer_var.get()
-                if layer == "1":
-                    zmin, zmax = 0, c1
-                elif layer == "2":
-                    zmin, zmax = c1, c2
-                elif layer == "3":
-                    zmin, zmax = c2, c3
-                else:  # all
-                    zmin, zmax = 0, c3
+            # Actualizar el indicador de la esquina (usa checkboxes)
+            if self._layer_label:
+                self._on_draw_layer_change()
 
-                if layer == "all":
-                    layer_text = "Todas las capas"
-                else:
-                    layer_text = f"Capa {layer}"
-
-                self._layer_label.config(text=f"{layer_text}\n({zmin}-{zmax} cm)")
-
-            # Actualizar también el indicador de la ventana de misiones
-            if self._mission_layer_label and self._mission_draw_layer_var:
-                layer = self._mission_draw_layer_var.get()
-                if layer == "1":
-                    zmin, zmax = 0, c1
-                elif layer == "2":
-                    zmin, zmax = c1, c2
-                elif layer == "3":
-                    zmin, zmax = c2, c3
-                else:  # all
-                    zmin, zmax = 0, c3
-
-                colors = {"1": "#28a745", "2": "#fd7e14", "3": "#007bff", "all": "#6c757d"}
-                bg = colors.get(layer, "#333")
-                txt = "Todas las capas" if layer == "all" else f"Capa {layer}"
-                self._mission_layer_label.config(text=f"{txt}\n({zmin}-{zmax} cm)", bg=bg)
+            # Actualizar también el indicador de la ventana de misiones (usa checkboxes)
+            if self._mission_layer_label:
+                self._on_mission_layer_change()
 
         # Capa 3 (arriba - azul) - techo
         layer3_frame = tk.Frame(layers_container, bg=layer_colors[2], bd=0)
@@ -2138,42 +2135,64 @@ class MiniRemoteApp:
             self._map_select_obstacle_at(wx, wy)
 
     def _on_draw_layer_change(self, *args):
-        """Actualiza el indicador de capa cuando cambia la selección."""
-        if not self._draw_layer_var:
-            return
+        """Actualiza el indicador de capa cuando cambia la selección (checkboxes)."""
+        # Obtener capas seleccionadas desde checkboxes
+        c1 = getattr(self, '_draw_layer_c1', None)
+        c2 = getattr(self, '_draw_layer_c2', None)
+        c3 = getattr(self, '_draw_layer_c3', None)
 
-        layer = self._draw_layer_var.get()
-        zmin, zmax = self._get_layer_z_range(layer)
+        selected = []
+        if c1 and c1.get():
+            selected.append(1)
+        if c2 and c2.get():
+            selected.append(2)
+        if c3 and c3.get():
+            selected.append(3)
+
+        zmin, zmax = self._get_layer_z_range()
 
         # Actualizar el indicador grande de la esquina
         if self._layer_label:
-            # Usar colores consistentes con el tema
-            colors = {
-                "1": "#28a745",  # Verde - capa 1
-                "2": "#fd7e14",  # Naranja - capa 2
-                "3": "#007bff",  # Azul - capa 3
-                "all": "#6c757d",  # Gris - todas
-            }
-            bg_color = colors.get(layer, "#333333")
-
-            if layer == "all":
+            # Determinar color según capas seleccionadas
+            if len(selected) == 0:
+                bg_color = "#6c757d"  # Gris - ninguna (usará todas)
                 layer_text = "Todas las capas"
+            elif len(selected) == 3:
+                bg_color = "#6c757d"  # Gris - todas
+                layer_text = "Todas las capas"
+            elif len(selected) == 1:
+                colors = {1: "#28a745", 2: "#fd7e14", 3: "#007bff"}
+                bg_color = colors.get(selected[0], "#333333")
+                layer_text = f"Capa {selected[0]}"
             else:
-                layer_text = f"Capa {layer}"
+                # Combinación de 2 capas
+                bg_color = "#9b59b6"  # Púrpura para combinaciones
+                layer_text = "Capas " + "+".join(str(s) for s in selected)
 
             self._layer_label.config(
                 text=f"{layer_text}\n({zmin}-{zmax} cm)",
                 bg=bg_color
             )
 
-            # Redibujar mapa para mostrar exclusiones de esa capa
-            self._current_layer = int(layer) if layer.isdigit() else 0
+            # Redibujar mapa para mostrar exclusiones
+            self._current_layer = selected[0] if len(selected) == 1 else 0
             self._redraw_map_static()
 
-    def _get_layer_z_range(self, layer_str):
-        """Obtiene el rango Z para una capa seleccionada."""
-        # Obtener configuración de capas
-        if hasattr(self.dron, "get_layers"):
+    def _get_layer_z_range(self, layer_str=None):
+        """Obtiene el rango Z para las capas seleccionadas (checkboxes)."""
+        # Leer de los sliders de la UI si existen
+        c1_max = getattr(self, '_layer1_max_var', None)
+        c2_max = getattr(self, '_layer2_max_var', None)
+        c3_max = getattr(self, '_layer3_max_var', None)
+
+        if c1_max and c2_max and c3_max:
+            # Usar valores de los sliders
+            layers = [
+                {"z_min": 0, "z_max": c1_max.get()},
+                {"z_min": c1_max.get(), "z_max": c2_max.get()},
+                {"z_min": c2_max.get(), "z_max": c3_max.get()},
+            ]
+        elif hasattr(self.dron, "get_layers"):
             layers = self.dron.get_layers()
         else:
             layers = [
@@ -2182,24 +2201,53 @@ class MiniRemoteApp:
                 {"z_min": 120, "z_max": 200},
             ]
 
-        if layer_str == "all":
+        # Si se pasa un string (compatibilidad), usar lógica antigua
+        if layer_str is not None:
+            if layer_str == "all":
+                return 0, int(layers[-1]["z_max"]) if layers else 200
+            elif layer_str == "1":
+                return int(layers[0]["z_min"]), int(layers[0]["z_max"])
+            elif layer_str == "2":
+                return int(layers[1]["z_min"]), int(layers[1]["z_max"])
+            elif layer_str == "3":
+                return int(layers[2]["z_min"]), int(layers[2]["z_max"])
+            elif layer_str == "1+2":
+                return int(layers[0]["z_min"]), int(layers[1]["z_max"])
+            elif layer_str == "2+3":
+                return int(layers[1]["z_min"]), int(layers[2]["z_max"])
+            elif layer_str == "1+3":
+                return int(layers[0]["z_min"]), int(layers[2]["z_max"])
+            else:
+                return 0, 200
+
+        # Usar checkboxes para determinar capas seleccionadas
+        c1 = getattr(self, '_draw_layer_c1', None)
+        c2 = getattr(self, '_draw_layer_c2', None)
+        c3 = getattr(self, '_draw_layer_c3', None)
+
+        selected = []
+        if c1 and c1.get():
+            selected.append(0)
+        if c2 and c2.get():
+            selected.append(1)
+        if c3 and c3.get():
+            selected.append(2)
+
+        if not selected:
+            # Si no hay ninguna seleccionada, usar todas
             return 0, int(layers[-1]["z_max"]) if layers else 200
-        elif layer_str == "1":
-            return int(layers[0]["z_min"]), int(layers[0]["z_max"])
-        elif layer_str == "2":
-            return int(layers[1]["z_min"]), int(layers[1]["z_max"])
-        elif layer_str == "3":
-            return int(layers[2]["z_min"]), int(layers[2]["z_max"])
-        else:
-            return 0, 200
+
+        # Calcular zmin y zmax basándose en las capas seleccionadas
+        zmin = int(layers[min(selected)]["z_min"])
+        zmax = int(layers[max(selected)]["z_max"])
+        return zmin, zmax
 
     def _add_exclusion_circle(self, wx, wy):
 
         r = float(self._circle_radius_var.get() or 30.0)
 
-        # Obtener Z según la capa seleccionada
-        layer = self._draw_layer_var.get() if self._draw_layer_var else "all"
-        zmin, zmax = self._get_layer_z_range(layer)
+        # Obtener Z según las capas seleccionadas (checkboxes)
+        zmin, zmax = self._get_layer_z_range()
 
         self._excl_circles.append({"cx": wx, "cy": wy, "r": r, "zmin": zmin, "zmax": zmax})
 
@@ -2237,9 +2285,8 @@ class MiniRemoteApp:
             x1, y1 = self._rect_points[0]
             x2, y2 = self._rect_points[1]
 
-            # Obtener Z según la capa seleccionada
-            layer = self._draw_layer_var.get() if self._draw_layer_var else "all"
-            zmin, zmax = self._get_layer_z_range(layer)
+            # Obtener Z según las capas seleccionadas (checkboxes)
+            zmin, zmax = self._get_layer_z_range()
 
             # Crear polígono rectangular (4 esquinas)
             rect_poly = [(x1, y1), (x2, y1), (x2, y2), (x1, y2)]
@@ -2278,9 +2325,8 @@ class MiniRemoteApp:
             messagebox.showwarning("Polígono", "Necesitas al menos 3 puntos.")
             return
 
-        # Obtener Z según la capa seleccionada
-        layer = self._draw_layer_var.get() if self._draw_layer_var else "all"
-        zmin, zmax = self._get_layer_z_range(layer)
+        # Obtener Z según las capas seleccionadas (checkboxes)
+        zmin, zmax = self._get_layer_z_range()
 
         self._excl_polys.append({"poly": list(self._poly_points), "zmin": zmin, "zmax": zmax})
 
@@ -2472,6 +2518,61 @@ class MiniRemoteApp:
         # Sincronizar con backend
         self._reapply_exclusions_to_backend()
         self._redraw_map_static()
+
+    def _map_duplicate_obs_to_layer(self):
+        """Duplica el obstáculo seleccionado a las capas marcadas en los checkboxes."""
+        if self._map_selected_obs_idx is None or self._map_selected_obs_type is None:
+            messagebox.showinfo("Sin selección", "Primero selecciona un obstáculo con ✋")
+            return
+
+        # Obtener zmin/zmax de los checkboxes seleccionados
+        zmin, zmax = self._get_layer_z_range()
+
+        idx = self._map_selected_obs_idx
+        obs_type = self._map_selected_obs_type
+
+        if obs_type == 'circle':
+            if idx < len(self._excl_circles):
+                orig = self._excl_circles[idx]
+                new_obs = {
+                    'cx': orig['cx'],
+                    'cy': orig['cy'],
+                    'r': orig['r'],
+                    'zmin': zmin,
+                    'zmax': zmax,
+                    'nombre': orig.get('nombre', '')
+                }
+                self._excl_circles.append(new_obs)
+                print(f"[MAP] Círculo duplicado a capa {zmin}-{zmax}cm")
+
+                # Sincronizar con backend
+                if hasattr(self.dron, "add_exclusion_circle"):
+                    self.dron.add_exclusion_circle(
+                        cx=new_obs['cx'], cy=new_obs['cy'], r_cm=new_obs['r'],
+                        z_min_cm=zmin, z_max_cm=zmax
+                    )
+
+        elif obs_type == 'poly':
+            if idx < len(self._excl_polys):
+                orig = self._excl_polys[idx]
+                new_obs = {
+                    'poly': list(orig['poly']),  # Copia de los puntos
+                    'zmin': zmin,
+                    'zmax': zmax,
+                    'nombre': orig.get('nombre', '')
+                }
+                self._excl_polys.append(new_obs)
+                print(f"[MAP] Polígono duplicado a capa {zmin}-{zmax}cm")
+
+                # Sincronizar con backend
+                if hasattr(self.dron, "add_exclusion_polygon"):
+                    self.dron.add_exclusion_polygon(
+                        points=new_obs['poly'],
+                        z_min_cm=zmin, z_max_cm=zmax
+                    )
+
+        self._redraw_map_static()
+        self._hud_show(f"Duplicado a {zmin}-{zmax}cm", 1.5)
 
     def _start_geofence_rect(self):
         """Inicia el dibujo de la zona de geofence en el mapa."""
@@ -2848,12 +2949,24 @@ class MiniRemoteApp:
         excl_zmin = float(excl_zmin) if excl_zmin is not None else 0.0
         excl_zmax = float(excl_zmax) if excl_zmax is not None else 999.0
 
-        # Rangos por defecto de capas
-        layers_ranges = [
-            (0, 60),    # Capa 1
-            (60, 120),  # Capa 2
-            (120, 200)  # Capa 3
-        ]
+        # Leer rangos de los sliders si existen
+        c1_max = getattr(self, '_layer1_max_var', None)
+        c2_max = getattr(self, '_layer2_max_var', None)
+        c3_max = getattr(self, '_layer3_max_var', None)
+
+        if c1_max and c2_max and c3_max:
+            layers_ranges = [
+                (0, c1_max.get()),           # Capa 1
+                (c1_max.get(), c2_max.get()), # Capa 2
+                (c2_max.get(), c3_max.get())  # Capa 3
+            ]
+        else:
+            # Fallback a valores por defecto
+            layers_ranges = [
+                (0, 60),    # Capa 1
+                (60, 120),  # Capa 2
+                (120, 200)  # Capa 3
+            ]
 
         result = []
         for i, (layer_zmin, layer_zmax) in enumerate(layers_ranges):
@@ -3599,20 +3712,40 @@ class MiniRemoteApp:
         tk.Entry(obs_row, textvariable=self._mission_obs_radius, width=5).pack(side="left", padx=4)
         tk.Label(obs_row, text="cm", bg=BG_CARD, font=("Arial", 8)).pack(side="left")
 
-        # Selector de capa para obstáculos
+        # Selector de capa para obstáculos con checkboxes (permite combinaciones libres)
         layer_colors = ["#28a745", "#fd7e14", "#007bff"]  # Verde, Naranja, Azul
-        self._mission_draw_layer_var = tk.StringVar(value="1")
-        self._mission_draw_layer_var.trace_add("write", self._on_mission_layer_change)
+        self._mission_layer_c1 = tk.BooleanVar(value=True)
+        self._mission_layer_c2 = tk.BooleanVar(value=False)
+        self._mission_layer_c3 = tk.BooleanVar(value=False)
 
         layer_row = tk.Frame(tools_content, bg=BG_CARD)
         layer_row.pack(fill="x", pady=2)
-        tk.Label(layer_row, text="Capa:", bg=BG_CARD, font=("Arial", 8)).pack(side="left")
+        tk.Label(layer_row, text="Capas:", bg=BG_CARD, font=("Arial", 8)).pack(side="left")
 
-        for val, color, txt in [("1", layer_colors[0], "C1"), ("2", layer_colors[1], "C2"),
-                                 ("3", layer_colors[2], "C3"), ("all", "#6c757d", "ALL")]:
-            tk.Radiobutton(layer_row, text=txt, variable=self._mission_draw_layer_var, value=val,
-                           bg=color, fg="white", selectcolor=color, activebackground=color,
-                           indicatoron=0, width=4, font=("Arial", 8, "bold")).pack(side="left", padx=1)
+        # Checkboxes para capas
+        tk.Checkbutton(layer_row, text="C1", variable=self._mission_layer_c1,
+                       bg=layer_colors[0], fg="white", selectcolor=layer_colors[0],
+                       activebackground=layer_colors[0], font=("Arial", 8, "bold"),
+                       indicatoron=0, width=3, command=self._on_mission_layer_change).pack(side="left", padx=1)
+        tk.Checkbutton(layer_row, text="C2", variable=self._mission_layer_c2,
+                       bg=layer_colors[1], fg="white", selectcolor=layer_colors[1],
+                       activebackground=layer_colors[1], font=("Arial", 8, "bold"),
+                       indicatoron=0, width=3, command=self._on_mission_layer_change).pack(side="left", padx=1)
+        tk.Checkbutton(layer_row, text="C3", variable=self._mission_layer_c3,
+                       bg=layer_colors[2], fg="white", selectcolor=layer_colors[2],
+                       activebackground=layer_colors[2], font=("Arial", 8, "bold"),
+                       indicatoron=0, width=3, command=self._on_mission_layer_change).pack(side="left", padx=1)
+
+        # Botón "Todas" para marcar/desmarcar todas
+        def toggle_mission_layers():
+            all_on = self._mission_layer_c1.get() and self._mission_layer_c2.get() and self._mission_layer_c3.get()
+            self._mission_layer_c1.set(not all_on)
+            self._mission_layer_c2.set(not all_on)
+            self._mission_layer_c3.set(not all_on)
+            self._on_mission_layer_change()
+
+        tk.Button(layer_row, text="ALL", command=toggle_mission_layers,
+                  bg="#6c757d", fg="white", font=("Arial", 8, "bold"), bd=0, width=4).pack(side="left", padx=1)
 
         # Inicializar indicador con la capa de trabajo seleccionada
         self._on_mission_layer_change()
@@ -3818,22 +3951,9 @@ class MiniRemoteApp:
             self._mission_layer2_range_var.set(f"{c1} - {c2} cm")
             self._mission_layer3_range_var.set(f"{c2} - {c3} cm")
 
-            # Actualizar también el indicador de la esquina
-            if self._mission_layer_label and self._mission_draw_layer_var:
-                layer = self._mission_draw_layer_var.get()
-                if layer == "1":
-                    zmin, zmax = 0, c1
-                elif layer == "2":
-                    zmin, zmax = c1, c2
-                elif layer == "3":
-                    zmin, zmax = c2, c3
-                else:  # all
-                    zmin, zmax = 0, c3
-
-                colors = {"1": "#28a745", "2": "#fd7e14", "3": "#007bff", "all": "#6c757d"}
-                bg = colors.get(layer, "#333")
-                txt = "Todas las capas" if layer == "all" else f"Capa {layer}"
-                self._mission_layer_label.config(text=f"{txt}\n({zmin}-{zmax} cm)", bg=bg)
+            # Actualizar también el indicador de la esquina (usa checkboxes)
+            if self._mission_layer_label:
+                self._on_mission_layer_change()
 
         def on_mc1_change(*args):
             c1 = self._layer1_max_var.get()
@@ -4018,6 +4138,8 @@ class MiniRemoteApp:
         self._action_photo = tk.BooleanVar(value=False)
         self._action_video = tk.BooleanVar(value=False)
         self._action_video_duration = tk.IntVar(value=5)
+        self._action_video_start = tk.BooleanVar(value=False)
+        self._action_video_stop = tk.BooleanVar(value=False)
         self._action_rotate = tk.BooleanVar(value=False)
         self._action_rotate_deg = tk.IntVar(value=90)
         self._action_wait = tk.BooleanVar(value=False)
@@ -4030,14 +4152,28 @@ class MiniRemoteApp:
                        bg=BG_CARD, activebackground=BG_CARD, font=("Arial", 8),
                        command=self._update_wp_actions).pack(side="left")
 
-        # Video
+        # Video (duración fija en este WP)
         af2 = tk.Frame(actions_content, bg=BG_CARD)
         af2.pack(fill="x", pady=1)
-        tk.Checkbutton(af2, text="🎬 Grabar", variable=self._action_video,
+        self._cb_video = tk.Checkbutton(af2, text="🎬 Grabar", variable=self._action_video,
                        bg=BG_CARD, activebackground=BG_CARD, font=("Arial", 8),
-                       command=self._update_wp_actions).pack(side="left")
-        tk.Entry(af2, textvariable=self._action_video_duration, width=3).pack(side="left", padx=2)
+                       command=self._on_video_mode_change)
+        self._cb_video.pack(side="left")
+        self._entry_video_dur = tk.Entry(af2, textvariable=self._action_video_duration, width=3)
+        self._entry_video_dur.pack(side="left", padx=2)
         tk.Label(af2, text="seg", bg=BG_CARD, font=("Arial", 8)).pack(side="left")
+
+        # Video Start/Stop (para videos entre waypoints)
+        af2b = tk.Frame(actions_content, bg=BG_CARD)
+        af2b.pack(fill="x", pady=1)
+        self._cb_video_start = tk.Checkbutton(af2b, text="▶ Iniciar video", variable=self._action_video_start,
+                       bg=BG_CARD, activebackground=BG_CARD, font=("Arial", 8), fg="#28a745",
+                       command=self._on_video_mode_change)
+        self._cb_video_start.pack(side="left")
+        self._cb_video_stop = tk.Checkbutton(af2b, text="⏹ Parar video", variable=self._action_video_stop,
+                       bg=BG_CARD, activebackground=BG_CARD, font=("Arial", 8), fg="#dc3545",
+                       command=self._on_video_mode_change)
+        self._cb_video_stop.pack(side="left", padx=(10, 0))
 
         # Girar
         af3 = tk.Frame(actions_content, bg=BG_CARD)
@@ -4126,15 +4262,82 @@ class MiniRemoteApp:
         return wx, wy
 
     def _on_mission_layer_change(self, *args):
-        """Actualiza el indicador de capa cuando cambia la selección en Editor de Misiones."""
-        if self._mission_draw_layer_var and self._mission_layer_label:
-            layer = self._mission_draw_layer_var.get()
-            zmin, zmax = self._get_layer_z_range(layer)
-            colors = {"1": "#28a745", "2": "#fd7e14", "3": "#007bff", "all": "#6c757d"}
-            bg = colors.get(layer, "#333")
-            txt = "Todas las capas" if layer == "all" else f"Capa {layer}"
-            self._mission_layer_label.config(text=f"{txt}\n({zmin}-{zmax} cm)", bg=bg)
+        """Actualiza el indicador de capa cuando cambia la selección en Editor de Misiones (checkboxes)."""
+        # Obtener capas seleccionadas desde checkboxes
+        c1 = getattr(self, '_mission_layer_c1', None)
+        c2 = getattr(self, '_mission_layer_c2', None)
+        c3 = getattr(self, '_mission_layer_c3', None)
+
+        selected = []
+        if c1 and c1.get():
+            selected.append(1)
+        if c2 and c2.get():
+            selected.append(2)
+        if c3 and c3.get():
+            selected.append(3)
+
+        zmin, zmax = self._get_mission_layer_z_range()
+
+        if self._mission_layer_label:
+            # Determinar color según capas seleccionadas
+            if len(selected) == 0:
+                bg_color = "#6c757d"
+                layer_text = "Todas las capas"
+            elif len(selected) == 3:
+                bg_color = "#6c757d"
+                layer_text = "Todas las capas"
+            elif len(selected) == 1:
+                colors = {1: "#28a745", 2: "#fd7e14", 3: "#007bff"}
+                bg_color = colors.get(selected[0], "#333333")
+                layer_text = f"Capa {selected[0]}"
+            else:
+                bg_color = "#9b59b6"  # Púrpura para combinaciones
+                layer_text = "Capas " + "+".join(str(s) for s in selected)
+
+            self._mission_layer_label.config(text=f"{layer_text}\n({zmin}-{zmax} cm)", bg=bg_color)
         self._draw_mission_map()
+
+    def _get_mission_layer_z_range(self):
+        """Obtiene el rango Z para las capas seleccionadas en Editor de Misiones (checkboxes)."""
+        # Leer de los sliders de la UI si existen
+        c1_max = getattr(self, '_layer1_max_var', None)
+        c2_max = getattr(self, '_layer2_max_var', None)
+        c3_max = getattr(self, '_layer3_max_var', None)
+
+        if c1_max and c2_max and c3_max:
+            # Usar valores de los sliders
+            layers = [
+                {"z_min": 0, "z_max": c1_max.get()},
+                {"z_min": c1_max.get(), "z_max": c2_max.get()},
+                {"z_min": c2_max.get(), "z_max": c3_max.get()},
+            ]
+        elif hasattr(self.dron, "get_layers"):
+            layers = self.dron.get_layers()
+        else:
+            layers = [
+                {"z_min": 0, "z_max": 60},
+                {"z_min": 60, "z_max": 120},
+                {"z_min": 120, "z_max": 200},
+            ]
+
+        c1 = getattr(self, '_mission_layer_c1', None)
+        c2 = getattr(self, '_mission_layer_c2', None)
+        c3 = getattr(self, '_mission_layer_c3', None)
+
+        selected = []
+        if c1 and c1.get():
+            selected.append(0)
+        if c2 and c2.get():
+            selected.append(1)
+        if c3 and c3.get():
+            selected.append(2)
+
+        if not selected:
+            return 0, int(layers[-1]["z_max"]) if layers else 200
+
+        zmin = int(layers[min(selected)]["z_min"])
+        zmax = int(layers[max(selected)]["z_max"])
+        return zmin, zmax
 
     def _draw_mission_map(self):
         """Dibuja el mapa de misiones."""
@@ -4170,13 +4373,19 @@ class MiniRemoteApp:
             self._mission_canvas.create_rectangle(x1, y1, x2, y2,
                                                    outline="#28a745", fill="", width=3, dash=(10, 5))
 
-        # Obtener capa de trabajo para colorear obstáculos
-        layer_var = getattr(self, '_mission_draw_layer_var', None)
-        current_layer = 0
-        if layer_var:
-            layer_str = layer_var.get()
-            current_layer = int(layer_str) if layer_str.isdigit() else 0
-        show_all = (current_layer == 0)
+        # Obtener capas seleccionadas (checkboxes) para colorear obstáculos
+        c1 = getattr(self, '_mission_layer_c1', None)
+        c2 = getattr(self, '_mission_layer_c2', None)
+        c3 = getattr(self, '_mission_layer_c3', None)
+        selected_layers = []
+        if c1 and c1.get():
+            selected_layers.append(1)
+        if c2 and c2.get():
+            selected_layers.append(2)
+        if c3 and c3.get():
+            selected_layers.append(3)
+        # Si no hay ninguna o están todas, mostrar todo
+        show_all = len(selected_layers) == 0 or len(selected_layers) == 3
 
         # Colores para obstáculos (igual que Abrir mapa)
         COLOR_IN_LAYER = "#ff0000"      # Rojo - obstáculo en capa actual
@@ -4188,9 +4397,9 @@ class MiniRemoteApp:
         for i, obs in enumerate(self._mission_exclusions):
             obs_type = obs.get('type', 'circle')
 
-            # Determinar si está en la capa de trabajo
+            # Determinar si está en alguna de las capas seleccionadas
             excl_layers = self._get_mission_exclusion_layers(obs)
-            in_current_layer = show_all or (current_layer in excl_layers)
+            in_current_layer = show_all or any(l in excl_layers for l in selected_layers)
 
             # Color diferente si está seleccionado
             is_selected = (i == self._selected_obs_idx)
@@ -4479,6 +4688,8 @@ class MiniRemoteApp:
                 'photo': False,
                 'video': False,
                 'video_duration': 5,
+                'video_start': False,   # Iniciar grabación continua
+                'video_stop': False,    # Detener grabación continua
                 'rotate': False,
                 'rotate_deg': 0,
                 'wait': False,
@@ -4720,35 +4931,6 @@ class MiniRemoteApp:
                 result.append(i + 1)
 
         return result if result else [1, 2, 3]  # Si no hay datos, mostrar "todas"
-
-    def _get_mission_layer_z_range(self):
-        """Obtiene el rango Z para la capa seleccionada en el editor de misiones."""
-        layer = getattr(self, '_mission_draw_layer_var', None)
-        if not layer:
-            return 0, 200
-
-        layer_str = layer.get()
-
-        # Obtener configuración de capas
-        if hasattr(self.dron, "get_layers"):
-            layers = self.dron.get_layers()
-        else:
-            layers = [
-                {"z_min": 0, "z_max": 60},
-                {"z_min": 60, "z_max": 120},
-                {"z_min": 120, "z_max": 200},
-            ]
-
-        if layer_str == "all":
-            return 0, int(layers[-1]["z_max"]) if layers else 200
-        elif layer_str == "1":
-            return int(layers[0]["z_min"]), int(layers[0]["z_max"])
-        elif layer_str == "2":
-            return int(layers[1]["z_min"]), int(layers[1]["z_max"])
-        elif layer_str == "3":
-            return int(layers[2]["z_min"]), int(layers[2]["z_max"])
-        else:
-            return 0, 200
 
     def _delete_last_obstacle(self):
         """Elimina el último obstáculo añadido."""
@@ -5082,6 +5264,13 @@ class MiniRemoteApp:
         if hasattr(self, '_draw_map'):
             self._draw_map()
 
+        # Vincular escenario a la sesión activa (modo manual/RC)
+        if self._session_manager.is_session_active():
+            self._session_manager._session_data["escenario_id"] = self._current_scenario_id
+            self._session_manager._session_data["tipo"] = "manual"
+            self._session_manager._save_session_metadata()
+            print(f"[Session] Escenario vinculado (RC): {self._current_scenario_id}")
+
         messagebox.showinfo("Escenario", f"Escenario '{scenario.get('nombre')}' cargado.")
 
     def _save_scenario_from_map(self):
@@ -5168,7 +5357,11 @@ class MiniRemoteApp:
             if wp.get('photo'):
                 actions.append("📷")
             if wp.get('video'):
-                actions.append("🎬")
+                actions.append(f"🎬{wp.get('video_duration', 5)}s")
+            if wp.get('video_start'):
+                actions.append("▶REC")
+            if wp.get('video_stop'):
+                actions.append("⏹REC")
             if wp.get('rotate'):
                 actions.append(f"🔄{wp.get('rotate_deg', 0)}°")
             if wp.get('wait'):
@@ -5199,10 +5392,15 @@ class MiniRemoteApp:
         self._action_photo.set(wp.get('photo', False))
         self._action_video.set(wp.get('video', False))
         self._action_video_duration.set(wp.get('video_duration', 5))
+        self._action_video_start.set(wp.get('video_start', False))
+        self._action_video_stop.set(wp.get('video_stop', False))
         self._action_rotate.set(wp.get('rotate', False))
         self._action_rotate_deg.set(wp.get('rotate_deg', 90))
         self._action_wait.set(wp.get('wait', False))
         self._action_wait_sec.set(wp.get('wait_sec', 2))
+
+        # Actualizar estado de exclusión mutua de video
+        self._update_video_checkbox_states()
 
         self._wp_action_label.configure(text=f"Editando WP{idx + 1}")
         self._draw_mission_map()
@@ -5216,6 +5414,8 @@ class MiniRemoteApp:
         wp['photo'] = self._action_photo.get()
         wp['video'] = self._action_video.get()
         wp['video_duration'] = self._action_video_duration.get()
+        wp['video_start'] = self._action_video_start.get()
+        wp['video_stop'] = self._action_video_stop.get()
         wp['rotate'] = self._action_rotate.get()
         wp['rotate_deg'] = self._action_rotate_deg.get()
         wp['wait'] = self._action_wait.get()
@@ -5223,6 +5423,39 @@ class MiniRemoteApp:
 
         self._update_wp_listbox()
         self._draw_mission_map()
+
+    def _on_video_mode_change(self):
+        """Maneja cambios en los checkboxes de video con exclusión mutua."""
+        # Si "Grabar Xs" está activo, desactivar start/stop
+        if self._action_video.get():
+            self._action_video_start.set(False)
+            self._action_video_stop.set(False)
+        # Si start o stop están activos, desactivar "Grabar Xs"
+        elif self._action_video_start.get() or self._action_video_stop.get():
+            self._action_video.set(False)
+
+        self._update_video_checkbox_states()
+        self._update_wp_actions()
+
+    def _update_video_checkbox_states(self):
+        """Actualiza el estado visual de los checkboxes de video."""
+        # Si "Grabar Xs" está activo, deshabilitar start/stop
+        if self._action_video.get():
+            self._cb_video_start.configure(state="disabled")
+            self._cb_video_stop.configure(state="disabled")
+            self._entry_video_dur.configure(state="normal")
+        # Si start o stop están activos, deshabilitar "Grabar Xs"
+        elif self._action_video_start.get() or self._action_video_stop.get():
+            self._cb_video.configure(state="disabled")
+            self._entry_video_dur.configure(state="disabled")
+            self._cb_video_start.configure(state="normal")
+            self._cb_video_stop.configure(state="normal")
+        # Si ninguno está activo, todos habilitados
+        else:
+            self._cb_video.configure(state="normal")
+            self._entry_video_dur.configure(state="normal")
+            self._cb_video_start.configure(state="normal")
+            self._cb_video_stop.configure(state="normal")
 
     def _apply_wp_coords(self):
         """Aplica las coordenadas editadas al waypoint seleccionado."""
@@ -5472,7 +5705,11 @@ class MiniRemoteApp:
 
         def on_action(idx, action_name):
             """Callback al ejecutar una acción."""
-            action_texts = {'rotate': '🔄 Rotando', 'photo': '📷 Foto', 'video': '🎥 Video', 'wait': '⏳ Esperando'}
+            action_texts = {
+                'rotate': '🔄 Rotando', 'photo': '📷 Foto', 'video': '🎥 Video',
+                'video_start': '▶ Iniciando REC', 'video_stop': '⏹ Parando REC',
+                'wait': '⏳ Esperando'
+            }
             text = action_texts.get(action_name, action_name)
             self._mission_win.after(0, lambda: self._mission_status_label.configure(
                 text=f"WP{idx + 1}: {text}", fg="#17a2b8"))
@@ -5504,13 +5741,9 @@ class MiniRemoteApp:
                     import traceback
                     traceback.print_exc()
             elif action_name == 'video':
-                # Iniciar grabación de video
+                # Iniciar grabación de video (el mission executor controlará la duración)
                 print(f"[on_action] Iniciando grabación de video")
                 import time as time_module
-                import threading
-
-                wp = waypoints_to_execute[idx] if idx < len(waypoints_to_execute) else {}
-                duration = float(wp.get('video_duration', 5) or 5)
 
                 try:
                     # _start_recording con hilo dedicado para misiones (evita conflictos con FPV loop)
@@ -5525,35 +5758,57 @@ class MiniRemoteApp:
                     else:
                         print(f"[on_action] WARNING: Grabación iniciada pero sin confirmar frames aún")
 
-                    print(f"[on_action] Grabando video por {duration}s...")
+                    print(f"[on_action] Grabación iniciada, mission executor controlará duración")
 
                 except Exception as e:
                     print(f"[on_action] Error iniciando grabación: {e}")
                     import traceback
                     traceback.print_exc()
 
-                # PASO 5: Programar detención con verificación de frames
-                def stop_video():
-                    try:
-                        frames_before = getattr(self, '_rec_frame_count', 0)
-                        print(f"[on_action] Deteniendo grabación después de {duration}s")
-                        print(f"[on_action] Total frames grabados: {frames_before}")
-                        self._stop_recording()
+            elif action_name == 'video_stop':
+                # Detener grabación de video (llamado por mission executor o video_stop en waypoint)
+                try:
+                    frames_recorded = getattr(self, '_rec_frame_count', 0)
+                    print(f"[on_action] Deteniendo grabación de video")
+                    print(f"[on_action] Total frames grabados: {frames_recorded}")
+                    self._stop_recording()
 
-                        if frames_before == 0:
-                            print("[on_action] ⚠️ ADVERTENCIA: El video tiene 0 frames")
-                            print("[on_action] Posibles causas:")
-                            print("[on_action]   - El stream de video del dron no estaba activo")
-                            print("[on_action]   - El FPV no estaba corriendo")
-                            print("[on_action]   - Problema de conexión con el dron")
-                        else:
-                            print(f"[on_action] Video guardado correctamente ({frames_before} frames)")
-                    except Exception as e:
-                        print(f"[on_action] Error deteniendo grabación: {e}")
-                        import traceback
-                        traceback.print_exc()
+                    if frames_recorded == 0:
+                        print("[on_action] ⚠️ ADVERTENCIA: El video tiene 0 frames")
+                        print("[on_action] Posibles causas:")
+                        print("[on_action]   - El stream de video del dron no estaba activo")
+                        print("[on_action]   - El FPV no estaba corriendo")
+                        print("[on_action]   - Problema de conexión con el dron")
+                    else:
+                        print(f"[on_action] Video guardado correctamente ({frames_recorded} frames)")
+                except Exception as e:
+                    print(f"[on_action] Error deteniendo grabación: {e}")
+                    import traceback
+                    traceback.print_exc()
 
-                threading.Timer(duration, stop_video).start()
+            elif action_name == 'video_start':
+                # Iniciar grabación continua (sin duración, hasta video_stop)
+                print(f"[on_action] Iniciando grabación continua (hasta video_stop)")
+                import time as time_module
+
+                try:
+                    self._start_recording(force_dedicated_thread=True)
+
+                    # Esperar brevemente a que el hilo empiece a grabar
+                    for i in range(20):  # Máximo 2 segundos
+                        if self._rec_frame_count > 0:
+                            print(f"[on_action] Grabación continua confirmada, frames: {self._rec_frame_count}")
+                            break
+                        time_module.sleep(0.1)
+                    else:
+                        print(f"[on_action] WARNING: Grabación iniciada pero sin confirmar frames aún")
+
+                    print(f"[on_action] Grabación continua activa, continuará hasta video_stop")
+
+                except Exception as e:
+                    print(f"[on_action] Error iniciando grabación continua: {e}")
+                    import traceback
+                    traceback.print_exc()
 
         def on_finish():
             """Callback al terminar la misión."""

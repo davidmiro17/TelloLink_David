@@ -137,7 +137,7 @@ def _mission_worker(self,
 
         # Ejecuta el movimiento y manda el dron hacia el waypoint
         try:
-
+            # Nota: goto_rel ya maneja yaw opcional al inicio del movimiento
             # face_target hace que el dron rote para mirar hacia el destino antes de moverse
             self.goto_rel(dx_cm=dx, dy_cm=dy, dz_cm=dz, yaw_deg=yaw,
                          face_target=face_target, blocking=True)
@@ -145,9 +145,9 @@ def _mission_worker(self,
             print(f"[mission] Error en goto_rel de WP{idx}: {e}")
             break
 
-
+        # ═══════════════════════════════════════════════════════════════
         # EJECUTAR ACCIONES DEL WAYPOINT
-
+        # ═══════════════════════════════════════════════════════════════
         original_wp = waypoints[idx - 1]  # waypoints pasado (idx empieza en 1)
 
         # Acción: FOTO
@@ -160,24 +160,56 @@ def _mission_worker(self,
                 except Exception as e:
                     print(f"[mission] Error en callback de foto: {e}")
 
-        # Acción: VIDEO
+        # Acción: VIDEO (duración fija en este waypoint)
         if original_wp.get('video', False):
             video_duration = float(original_wp.get('video_duration', 5) or 5)
             print(f"[mission] WP{idx}: Grabando video por {video_duration}s 🎥")
+            # Iniciar timer ANTES de llamar al callback (para que la duración sea exacta)
+            t0 = time.time()
             if on_action:
                 try:
-                    on_action(idx - 1, 'video')
+                    on_action(idx - 1, 'video')  # Iniciar grabación
                 except Exception:
                     pass
-            # Esperar la duración del video (el callback on_action maneja start/stop)
-            t0 = time.time()
-            while time.time() - t0 < video_duration:
-                if getattr(self, "_mission_abort", False):
-                    print("[mission] Video interrumpido por aborto.")
-                    break
-                time.sleep(0.1)
-            if getattr(self, "_mission_abort", False):
+            # Esperar el tiempo restante de la duración del video
+            aborted = False
+            elapsed = time.time() - t0
+            remaining = video_duration - elapsed
+            if remaining > 0:
+                wait_until = time.time() + remaining
+                while time.time() < wait_until:
+                    if getattr(self, "_mission_abort", False):
+                        print("[mission] Video interrumpido por aborto.")
+                        aborted = True
+                        break
+                    time.sleep(0.1)
+            # Detener grabación (siempre, incluso si se abortó)
+            if on_action:
+                try:
+                    on_action(idx - 1, 'video_stop')  # Detener grabación
+                except Exception:
+                    pass
+            if aborted:
                 break
+
+        # Acción: VIDEO_START (iniciar grabación continua)
+        if original_wp.get('video_start', False):
+            print(f"[mission] WP{idx}: Iniciando grabación continua ▶")
+            if on_action:
+                try:
+                    on_action(idx - 1, 'video_start')
+                except Exception:
+                    pass
+            # No esperar - continuar inmediatamente al siguiente waypoint
+
+        # Acción: VIDEO_STOP (detener grabación continua)
+        if original_wp.get('video_stop', False):
+            print(f"[mission] WP{idx}: Deteniendo grabación ⏹")
+            if on_action:
+                try:
+                    on_action(idx - 1, 'video_stop')
+                except Exception:
+                    pass
 
         # Acción: ROTATE (rotación adicional)
         if original_wp.get('rotate', False):
