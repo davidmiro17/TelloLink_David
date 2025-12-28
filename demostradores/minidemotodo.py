@@ -922,7 +922,7 @@ class MiniRemoteApp:
 
     def _start_writer(self, size_wh):
         self._rec_size = size_wh
-        fourcc = cv2.VideoWriter_fourcc(*"XVID")
+        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
         self._rec_writer = cv2.VideoWriter(self._rec_path, fourcc, self._rec_fps, self._rec_size)
         print(f"[_start_writer] VideoWriter creado: path={self._rec_path}, size={size_wh}, fps={self._rec_fps}")
 
@@ -939,14 +939,23 @@ class MiniRemoteApp:
             try:
                 frame = None
 
-                # Leer del VideoCapture
-                if hasattr(self, '_cv_cap') and self._cv_cap is not None and self._cv_cap.isOpened():
-                    ret, direct_frame = self._cv_cap.read()
-                    if ret and direct_frame is not None:
-                        frame = direct_frame
-                        # Actualizar _last_bgr para otros usos (fotos, etc)
-                        with self._frame_lock:
-                            self._last_bgr = frame
+                # Si el FPV está activo, usar el último frame ya decodificado
+                if self._fpv_running or self._fpv_ext_running:
+                    with self._frame_lock:
+                        if self._last_bgr is not None:
+                            frame = self._last_bgr.copy()
+                else:
+                    # Leer del VideoCapture (modo dedicado)
+                    if hasattr(self, '_cv_cap') and self._cv_cap is not None and self._cv_cap.isOpened():
+                        # Vaciar frames viejos para evitar latencia
+                        for _ in range(5):
+                            self._cv_cap.grab()
+                        ret, direct_frame = self._cv_cap.read()
+                        if ret and direct_frame is not None:
+                            frame = direct_frame
+                            # Actualizar _last_bgr para otros usos (fotos, etc)
+                            with self._frame_lock:
+                                self._last_bgr = frame
 
                 if frame is not None:
                     frames_sin_datos = 0
