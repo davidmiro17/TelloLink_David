@@ -92,7 +92,7 @@ class SessionManager:
             self.start_session()
 
         if filename is None:
-            filename = f"rec_{datetime.now().strftime('%H%M%S_%f')[:-3]}.mp4"
+            filename = f"rec_{datetime.now().strftime('%H%M%S_%f')[:-3]}.avi"
 
         self._session_data["videos_count"] += 1
         self._save_session_metadata()
