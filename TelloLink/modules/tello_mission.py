@@ -164,25 +164,20 @@ def _mission_worker(self,
         if original_wp.get('video', False):
             video_duration = float(original_wp.get('video_duration', 5) or 5)
             print(f"[mission] WP{idx}: Grabando video por {video_duration}s 🎥")
-            # Iniciar timer ANTES de llamar al callback (para que la duración sea exacta)
-            t0 = time.time()
+            # Iniciar grabación antes de medir la duración real del clip
             if on_action:
                 try:
                     on_action(idx - 1, 'video')  # Iniciar grabación
                 except Exception:
                     pass
-            # Esperar el tiempo restante de la duración del video
             aborted = False
-            elapsed = time.time() - t0
-            remaining = video_duration - elapsed
-            if remaining > 0:
-                wait_until = time.time() + remaining
-                while time.time() < wait_until:
-                    if getattr(self, "_mission_abort", False):
-                        print("[mission] Video interrumpido por aborto.")
-                        aborted = True
-                        break
-                    time.sleep(0.1)
+            wait_until = time.time() + max(0.0, video_duration)
+            while time.time() < wait_until:
+                if getattr(self, "_mission_abort", False):
+                    print("[mission] Video interrumpido por aborto.")
+                    aborted = True
+                    break
+                time.sleep(0.1)
             # Detener grabación (siempre, incluso si se abortó)
             if on_action:
                 try:

@@ -933,7 +933,8 @@ class MiniRemoteApp:
         last_log_time = time.time()
         target_fps = self._rec_fps  # 30fps
         frame_interval = 1.0 / target_fps  # ~33ms
-        last_frame_time = time.time()
+        next_frame_time = time.monotonic()
+        last_good_frame = None
 
         while self._rec_running:
             try:
@@ -959,6 +960,7 @@ class MiniRemoteApp:
 
                 if frame is not None:
                     frames_sin_datos = 0
+                    last_good_frame = frame
 
                     # Crear writer si no existe
                     if self._rec_writer is None:
@@ -966,19 +968,21 @@ class MiniRemoteApp:
                         print(f"[_recording_thread] Creando writer con tamaño {w}x{h}")
                         self._start_writer((w, h))
 
-                    # Escribir frame (limitado a target_fps)
-                    now = time.time()
-                    if now - last_frame_time >= frame_interval:
-                        if self._rec_writer is not None:
-                            self._rec_writer.write(frame)
-                            self._rec_frame_count += 1
-                            last_frame_time = now
+                # Escribir frame (limitado a target_fps, rellenando si falta señal)
+                now = time.monotonic()
+                if now >= next_frame_time:
+                    if self._rec_writer is not None and last_good_frame is not None:
+                        self._rec_writer.write(last_good_frame)
+                        self._rec_frame_count += 1
+                        next_frame_time += frame_interval
 
-                            # Log cada ~1 segundo
-                            if now - last_log_time >= 1.0:
-                                print(f"[_recording_thread] Frames grabados: {self._rec_frame_count}")
-                                last_log_time = now
+                        # Log cada ~1 segundo
+                        if time.time() - last_log_time >= 1.0:
+                            print(f"[_recording_thread] Frames grabados: {self._rec_frame_count}")
+                            last_log_time = time.time()
                 else:
+                    time.sleep(0.005)
+                if frame is None:
                     frames_sin_datos += 1
                     if frames_sin_datos == 30:
                         print("[_recording_thread] WARNING: No hay frames disponibles")
@@ -3616,14 +3620,18 @@ class MiniRemoteApp:
         if hasattr(self, '_mission_win') and self._mission_win:
             try:
                 if tk.Toplevel.winfo_exists(self._mission_win):
-                    self._mission_win.lift()
-                    return
-            except:
-                pass
+                    if getattr(self, "_mission_canvas", None) is None or not self._mission_canvas.winfo_exists():
+                        self._close_mission_window()
+                    else:
+                        self._mission_win.lift()
+                        return
+            except Exception:
+                self._close_mission_window()
 
         self._mission_win = tk.Toplevel(self.root)
         self._mission_win.title("Editor de Misiones")
         self._mission_win.geometry(f"{MAP_SIZE_PX + 360}x{MAP_SIZE_PX + 50}")
+        self._mission_win.protocol("WM_DELETE_WINDOW", self._close_mission_window)
 
         # Estado de la misión
         self._mission_waypoints = []  # Lista de waypoints con acciones
@@ -4252,6 +4260,24 @@ class MiniRemoteApp:
         # Dibujar mapa inicial
         self._draw_mission_map()
 
+    def _close_mission_window(self):
+        """Cierra el editor de misiones y limpia referencias."""
+        try:
+            if hasattr(self, "_mission_win") and self._mission_win:
+                try:
+                    self._mission_win.grab_release()
+                except Exception:
+                    pass
+                try:
+                    self._mission_win.destroy()
+                except Exception:
+                    pass
+        finally:
+            self._mission_win = None
+            self._mission_canvas = None
+            self._mission_layer_label = None
+            self._mission_running = False
+
     def _mission_world_to_canvas(self, wx, wy):
         """Convierte coordenadas mundo a canvas (misión).
         Sistema: +X mundo = arriba en pantalla (forward), +Y mundo = derecha (right)
@@ -4380,7 +4406,7 @@ class MiniRemoteApp:
             x1, y1 = self._mission_world_to_canvas(gf['x1'], gf['y1'])
             x2, y2 = self._mission_world_to_canvas(gf['x2'], gf['y2'])
             self._mission_canvas.create_rectangle(x1, y1, x2, y2,
-                                                   outline="#28a745", fill="", width=3, dash=(10, 5))
+                                                   outline="#28a745", fill="", width=3)
 
         # Obtener capas seleccionadas (checkboxes) para colorear obstáculos
         c1 = getattr(self, '_mission_layer_c1', None)
@@ -4774,7 +4800,9 @@ class MiniRemoteApp:
                 # Guardar geofence local para misión
                 self._mission_geofence = {
                     'x1': min(x1, x2), 'y1': min(y1, y2),
-                    'x2': max(x1, x2), 'y2': max(y1, y2)
+                    'x2': max(x1, x2), 'y2': max(y1, y2),
+                    'zmin': int(self.gf_zmin_var.get() or 0),
+                    'zmax': int(self.gf_zmax_var.get() or 200)
                 }
 
                 width_x = abs(x2 - x1)
@@ -5046,14 +5074,18 @@ class MiniRemoteApp:
 
         # Cargar geofence
         gf = scenario.get('geofence', {})
-        if gf and hasattr(self, '_mgf_x1'):
-            self._mgf_x1.set(int(gf.get('x1', -100)))
-            self._mgf_y1.set(int(gf.get('y1', -100)))
-            self._mgf_x2.set(int(gf.get('x2', 100)))
-            self._mgf_y2.set(int(gf.get('y2', 100)))
-            self._mgf_zmin.set(int(gf.get('zmin', 0)))
-            self._mgf_zmax.set(int(gf.get('zmax', 200)))
-            self._mission_geofence = gf
+        if gf:
+            self.gf_x1_var.set(str(int(gf.get('x1', -100))))
+            self.gf_y1_var.set(str(int(gf.get('y1', -100))))
+            self.gf_x2_var.set(str(int(gf.get('x2', 100))))
+            self.gf_y2_var.set(str(int(gf.get('y2', 100))))
+            self.gf_zmin_var.set(str(int(gf.get('zmin', 0))))
+            self.gf_zmax_var.set(str(int(gf.get('zmax', 200))))
+            self._mission_geofence = {
+                'x1': gf.get('x1', -100), 'y1': gf.get('y1', -100),
+                'x2': gf.get('x2', 100), 'y2': gf.get('y2', 100),
+                'zmin': gf.get('zmin', 0), 'zmax': gf.get('zmax', 200)
+            }
 
         # Cargar capas
         capas = scenario.get('capas', {})
@@ -5123,14 +5155,17 @@ class MiniRemoteApp:
                 return
 
             # Construir geofence
-            geofence = {
-                'x1': self._mgf_x1.get() if hasattr(self, '_mgf_x1') else -100,
-                'y1': self._mgf_y1.get() if hasattr(self, '_mgf_y1') else -100,
-                'x2': self._mgf_x2.get() if hasattr(self, '_mgf_x2') else 100,
-                'y2': self._mgf_y2.get() if hasattr(self, '_mgf_y2') else 100,
-                'zmin': self._mgf_zmin.get() if hasattr(self, '_mgf_zmin') else 0,
-                'zmax': self._mgf_zmax.get() if hasattr(self, '_mgf_zmax') else 200
-            }
+            if self._mission_geofence:
+                geofence = dict(self._mission_geofence)
+            else:
+                geofence = {
+                    'x1': self._mgf_x1.get() if hasattr(self, '_mgf_x1') else -100,
+                    'y1': self._mgf_y1.get() if hasattr(self, '_mgf_y1') else -100,
+                    'x2': self._mgf_x2.get() if hasattr(self, '_mgf_x2') else 100,
+                    'y2': self._mgf_y2.get() if hasattr(self, '_mgf_y2') else 100,
+                    'zmin': self._mgf_zmin.get() if hasattr(self, '_mgf_zmin') else 0,
+                    'zmax': self._mgf_zmax.get() if hasattr(self, '_mgf_zmax') else 200
+                }
 
             # Construir capas
             capas = {
@@ -5349,12 +5384,12 @@ class MiniRemoteApp:
     def _mission_apply_geofence(self):
         """Aplica el geofence configurado."""
         self._mission_geofence = {
-            'x1': min(self._mgf_x1.get(), self._mgf_x2.get()),
-            'y1': min(self._mgf_y1.get(), self._mgf_y2.get()),
-            'x2': max(self._mgf_x1.get(), self._mgf_x2.get()),
-            'y2': max(self._mgf_y1.get(), self._mgf_y2.get()),
-            'zmin': self._mgf_zmin.get(),
-            'zmax': self._mgf_zmax.get()
+            'x1': min(int(self.gf_x1_var.get() or -100), int(self.gf_x2_var.get() or 100)),
+            'y1': min(int(self.gf_y1_var.get() or -100), int(self.gf_y2_var.get() or 100)),
+            'x2': max(int(self.gf_x1_var.get() or -100), int(self.gf_x2_var.get() or 100)),
+            'y2': max(int(self.gf_y1_var.get() or -100), int(self.gf_y2_var.get() or 100)),
+            'zmin': int(self.gf_zmin_var.get() or 0),
+            'zmax': int(self.gf_zmax_var.get() or 200)
         }
         self._draw_mission_map()
 
@@ -5594,6 +5629,14 @@ class MiniRemoteApp:
 
         # Obtener opciones
         return_home = self._mission_return_home_var.get() if hasattr(self, '_mission_return_home_var') else False
+
+        # Registrar la sesión como misión aunque no haya escenario cargado
+        if self._session_manager.is_session_active():
+            self._session_manager._session_data["tipo"] = "plan"
+            self._session_manager._session_data["plan_id"] = "mission_editor"
+            if self._current_scenario_id:
+                self._session_manager._session_data["escenario_id"] = self._current_scenario_id
+            self._session_manager._save_session_metadata()
 
         # DEBUG: Mostrar información de validación
         print(f"[DEBUG] Waypoints: {len(self._mission_waypoints)}")
