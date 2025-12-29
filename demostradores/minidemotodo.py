@@ -23,6 +23,7 @@ import math
 import json
 import os
 import datetime
+import shutil
 
 # FPV / Imagen
 import cv2
@@ -133,9 +134,12 @@ class MiniRemoteApp:
 
         # Sistema de escenarios
         base_dir = os.path.dirname(os.path.abspath(__file__))
-        self._scenario_manager = get_scenario_manager(os.path.join(base_dir, "escenarios"))
+        repo_root = os.path.dirname(base_dir)
+        escenarios_dir = os.path.join(base_dir, "escenarios")
+        self._scenario_manager = get_scenario_manager(escenarios_dir)
         self._current_scenario_id = None
         self._scenario_combo = None
+        self._migrate_scenarios(os.path.join(repo_root, "escenarios"), escenarios_dir)
 
         # FPV
         self.fpv_label = None
@@ -154,6 +158,7 @@ class MiniRemoteApp:
         self._rec_expected_frames = None
         self._rec_last_good_frame = None
         self._rec_force_direct = False
+        self._fpv_record_enabled = False
         # FPV externo (ventana OpenCV)
         self._fpv_ext_running = False
         self._fpv_ext_thread = None
@@ -708,11 +713,12 @@ class MiniRemoteApp:
         try:
             if hasattr(self.dron, "disable_geofence"):
                 self.dron.disable_geofence()
-            else:
-                setattr(self.dron, "_gf_enabled", False)
+            setattr(self.dron, "_gf_enabled", False)
             self._hud_show("Geofence desactivado", 1.5)
             if self._map_win and tk.Toplevel.winfo_exists(self._map_win):
                 self._redraw_map_static()
+            if hasattr(self, '_mission_canvas') and self._mission_canvas and self._mission_canvas.winfo_exists():
+                self._draw_mission_map()
         except Exception as e:
             messagebox.showerror("Geofence", f"Error: {e}")
 
@@ -724,6 +730,7 @@ class MiniRemoteApp:
         self.gf_x2_var.set("100")
         self.gf_y2_var.set("100")
         self._incl_rect = None
+        self._mission_geofence = None
 
         # Desactivar geofence
         if hasattr(self.dron, "disable_geofence"):
@@ -737,10 +744,13 @@ class MiniRemoteApp:
             self._gf_pts.clear()
         if self.map_canvas:
             self.map_canvas.delete("gf_temp")
+            self.map_canvas.delete("inclusion")
 
         self._hud_show("Geofence limpiado", 1.5)
         if self._map_win and tk.Toplevel.winfo_exists(self._map_win):
             self._redraw_map_static()
+        if hasattr(self, '_mission_canvas') and self._mission_canvas and self._mission_canvas.winfo_exists():
+            self._draw_mission_map()
 
     def _restart_gf_monitor(self, force=False):
         try:
@@ -766,6 +776,56 @@ class MiniRemoteApp:
         except Exception:
             pass
 
+    def _migrate_scenarios(self, source_dir, target_dir):
+        """Migra escenarios desde otra carpeta al directorio activo."""
+        try:
+            if not os.path.isdir(source_dir) or not os.path.isdir(target_dir):
+                return
+            for filename in os.listdir(source_dir):
+                if not filename.endswith(".json"):
+                    continue
+                src = os.path.join(source_dir, filename)
+                dst = os.path.join(target_dir, filename)
+                if not os.path.exists(dst):
+                    try:
+                        shutil.copy2(src, dst)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+    def _ensure_stream_ready(self, retries=3, wait_s=3.0):
+        """Asegura que el stream de vídeo entrega frames válidos."""
+        for attempt in range(1, retries + 1):
+            try:
+                if hasattr(self.dron, "_tello"):
+                    self.dron._tello.streamoff()
+                    time.sleep(0.2)
+                    self.dron._tello.streamon()
+                    time.sleep(0.3)
+                if self._cv_cap is not None:
+                    try:
+                        self._cv_cap.release()
+                    except Exception:
+                        pass
+                self._cv_cap = cv2.VideoCapture("udp://0.0.0.0:11111", cv2.CAP_FFMPEG)
+                self._cv_cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+            except Exception:
+                pass
+
+            t0 = time.time()
+            while time.time() - t0 < wait_s:
+                if self._cv_cap is not None and self._cv_cap.isOpened():
+                    ret, frame = self._cv_cap.read()
+                    if ret and frame is not None:
+                        with self._frame_lock:
+                            self._last_bgr = frame
+                            self._last_frame_time = time.monotonic()
+                        return True
+                time.sleep(0.1)
+            print(f"[stream] Intento {attempt}/{retries} sin frames")
+        return False
+
     #FPV
     def start_fpv(self):
         if self._fpv_running:
@@ -783,18 +843,7 @@ class MiniRemoteApp:
             pass
         try:
             if self._cv_cap is None or not self._cv_cap.isOpened():
-                # Resetear el stream para evitar PPS antiguos
-                try:
-                    if hasattr(self.dron, "_tello"):
-                        self.dron._tello.streamoff()
-                        time.sleep(0.2)
-                        self.dron._tello.streamon()
-                        time.sleep(0.3)
-                except Exception:
-                    pass
-                self._cv_cap = cv2.VideoCapture("udp://0.0.0.0:11111", cv2.CAP_FFMPEG)
-                # Reducir buffer para minimizar latencia
-                self._cv_cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                self._ensure_stream_ready(retries=3, wait_s=3.0)
         except Exception:
             pass
         self._fpv_running = True
@@ -883,7 +932,7 @@ class MiniRemoteApp:
                 imgtk = ImageTk.PhotoImage(image=img)
                 self.fpv_label.configure(image=imgtk, text="")
                 self.fpv_label.image = imgtk
-                if self._rec_running:
+                if self._rec_running and self._fpv_record_enabled:
                     if self._rec_writer is None:
                         print(f"[_fpv_loop] Writer es None, creando con tamaño {target_w}x{target_h}")
                         self._start_writer((target_w, target_h))
@@ -952,6 +1001,8 @@ class MiniRemoteApp:
     def _recording_thread_func(self):
         """Hilo dedicado para grabación de video, independiente del FPV visual."""
         print("[_recording_thread] Iniciando hilo de grabación")
+        if self._fpv_record_enabled:
+            return
         frames_sin_datos = 0
         last_log_time = time.time()
         target_fps = self._rec_fps  # 30fps
@@ -963,37 +1014,15 @@ class MiniRemoteApp:
             try:
                 frame = None
 
-                # Si se fuerza lectura directa, ignorar el cache del FPV
-                if getattr(self, "_rec_force_direct", False):
-                    if hasattr(self, '_cv_cap') and self._cv_cap is not None and self._cv_cap.isOpened():
-                        for _ in range(5):
-                            self._cv_cap.grab()
-                        ret, direct_frame = self._cv_cap.read()
-                        if ret and direct_frame is not None:
-                            frame = direct_frame
-                            with self._frame_lock:
-                                self._last_bgr = frame
-                                self._rec_last_good_frame = frame
-                                self._last_frame_time = time.monotonic()
-                # Si el FPV está activo, usar el último frame ya decodificado
-                elif self._fpv_running or self._fpv_ext_running:
-                    with self._frame_lock:
-                        if self._last_bgr is not None:
-                            frame = self._last_bgr.copy()
-                else:
-                    # Leer del VideoCapture (modo dedicado)
-                    if hasattr(self, '_cv_cap') and self._cv_cap is not None and self._cv_cap.isOpened():
-                        # Vaciar frames viejos para evitar latencia
-                        for _ in range(5):
-                            self._cv_cap.grab()
-                        ret, direct_frame = self._cv_cap.read()
-                        if ret and direct_frame is not None:
-                            frame = direct_frame
-                            # Actualizar _last_bgr para otros usos (fotos, etc)
-                            with self._frame_lock:
-                                self._last_bgr = frame
-                                self._rec_last_good_frame = frame
-                                self._last_frame_time = time.monotonic()
+                # Hilo dedicado solo cuando FPV no esté grabando
+                if hasattr(self, '_cv_cap') and self._cv_cap is not None and self._cv_cap.isOpened():
+                    ret, direct_frame = self._cv_cap.read()
+                    if ret and direct_frame is not None:
+                        frame = direct_frame
+                        with self._frame_lock:
+                            self._last_bgr = frame
+                            self._rec_last_good_frame = frame
+                            self._last_frame_time = time.monotonic()
 
                 if frame is not None:
                     frames_sin_datos = 0
@@ -1039,7 +1068,8 @@ class MiniRemoteApp:
         self._rec_frame_count = 0
         self._rec_thread = None
         self._rec_last_good_frame = None
-        self._rec_force_direct = bool(force_dedicated_thread)
+        self._rec_force_direct = False
+        self._fpv_record_enabled = bool(self._fpv_running)
         if expected_duration is not None:
             try:
                 self._rec_expected_frames = max(0, int(round(float(expected_duration) * self._rec_fps)))
@@ -1059,31 +1089,15 @@ class MiniRemoteApp:
 
         if need_stream:
             print("[_start_recording] Iniciando stream de video...")
-            try:
-                # Activar stream del dron
-                if hasattr(self.dron, "_tello"):
-                    self.dron._tello.streamon()
-                    time.sleep(0.3)
-                # Crear VideoCapture
-                self._cv_cap = cv2.VideoCapture("udp://0.0.0.0:11111", cv2.CAP_FFMPEG)
-                self._cv_cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-            except Exception as e:
-                print(f"[_start_recording] Error iniciando stream: {e}")
+            if not self._ensure_stream_ready(retries=3, wait_s=3.0):
+                print("[_start_recording] WARNING: No se pudo estabilizar el stream")
 
         # Esperar a que haya frames disponibles
         print("[_start_recording] Esperando frames del stream...")
         max_wait = 50  # 5 segundos máximo
         for i in range(max_wait):
-            if self._fpv_running or self._fpv_ext_running:
-                with self._frame_lock:
-                    if self._last_bgr is not None:
-                        print(f"[_start_recording] Frame disponible después de {i*0.1:.1f}s (FPV)")
-                        break
-            elif self._cv_cap is not None and self._cv_cap.isOpened():
-                ret, frame = self._cv_cap.read()
-                if ret and frame is not None:
-                    with self._frame_lock:
-                        self._last_bgr = frame
+            with self._frame_lock:
+                if self._last_bgr is not None:
                     print(f"[_start_recording] Frame disponible después de {i*0.1:.1f}s")
                     break
             time.sleep(0.1)
@@ -1093,10 +1107,8 @@ class MiniRemoteApp:
         # Iniciar el flag de grabación
         self._rec_running = True
 
-        # Usar hilo dedicado si:
-        # 1. No hay FPV corriendo, O
-        # 2. Se fuerza el uso del hilo dedicado (para misiones)
-        use_dedicated = force_dedicated_thread or (not self._fpv_running and not self._fpv_ext_running)
+        # Usar hilo dedicado solo si no hay FPV activo
+        use_dedicated = not self._fpv_running and not self._fpv_ext_running
 
         if use_dedicated:
             self._rec_thread = threading.Thread(target=self._recording_thread_func, daemon=True)
@@ -1664,7 +1676,7 @@ class MiniRemoteApp:
         # Botones
         scenario_btns_map = tk.Frame(scenario_content_map, bg=BG_CARD)
         scenario_btns_map.pack(fill="x", pady=4)
-        tk.Button(scenario_btns_map, text="📂 Cargar", command=self._load_scenario_to_map,
+        tk.Button(scenario_btns_map, text="📂 Cargar", command=self._load_scenario_from_file_to_map,
                   bg="#17a2b8", fg="white", font=("Arial", 8), bd=0).pack(side="left", fill="x", expand=True, padx=2)
         tk.Button(scenario_btns_map, text="💾 Guardar", command=self._save_scenario_from_map,
                   bg="#28a745", fg="white", font=("Arial", 8), bd=0).pack(side="left", fill="x", expand=True, padx=2)
@@ -3862,7 +3874,7 @@ class MiniRemoteApp:
         # Botones de escenario
         scenario_btns = tk.Frame(scenario_content, bg=BG_CARD)
         scenario_btns.pack(fill="x", pady=4)
-        tk.Button(scenario_btns, text="📂 Cargar", command=self._load_scenario_to_editor,
+        tk.Button(scenario_btns, text="📂 Cargar", command=self._load_scenario_from_file,
                   bg="#17a2b8", fg="white", font=("Arial", 8), bd=0).pack(side="left", fill="x", expand=True, padx=2)
         tk.Button(scenario_btns, text="💾 Guardar", command=self._save_scenario_from_editor,
                   bg="#28a745", fg="white", font=("Arial", 8), bd=0).pack(side="left", fill="x", expand=True, padx=2)
@@ -4463,7 +4475,7 @@ class MiniRemoteApp:
             x1, y1 = self._mission_world_to_canvas(gf['x1'], gf['y1'])
             x2, y2 = self._mission_world_to_canvas(gf['x2'], gf['y2'])
             self._mission_canvas.create_rectangle(x1, y1, x2, y2,
-                                                   outline="#28a745", fill="", width=3)
+                                                  outline="#28a745", fill="", width=3)
 
         # Obtener capas seleccionadas (checkboxes) para colorear obstáculos
         c1 = getattr(self, '_mission_layer_c1', None)
@@ -5033,16 +5045,14 @@ class MiniRemoteApp:
             self._draw_mission_map()
 
     def _save_mission_template(self):
-        """Guarda la plantilla del Editor de Misiones (obstáculos, waypoints, geofence)."""
+        """Guarda la plantilla del Editor de Misiones (solo waypoints y acciones)."""
         path = filedialog.asksaveasfilename(defaultextension=".json", filetypes=[("JSON", "*.json")])
         if not path:
             return
 
         data = {
             "type": "mission",  # Identificador para distinguir del otro tipo
-            "exclusions": self._mission_exclusions,
             "waypoints": self._mission_waypoints,
-            "geofence": self._mission_geofence,
         }
 
         try:
@@ -5068,9 +5078,7 @@ class MiniRemoteApp:
                     "Este archivo es una plantilla de 'Abrir mapa', no de 'Editor de misiones'.")
                 return
 
-            self._mission_exclusions = data.get("exclusions", [])
             self._mission_waypoints = data.get("waypoints", [])
-            self._mission_geofence = data.get("geofence")
 
             # Actualizar UI
             try:
@@ -5097,7 +5105,12 @@ class MiniRemoteApp:
     def _refresh_scenario_list(self):
         """Refresca la lista de escenarios disponibles."""
         scenarios = self._scenario_manager.list_scenarios()
-        names = [s['nombre'] for s in scenarios]
+        names = []
+        self._scenario_display_map = {}
+        for s in scenarios:
+            display = f"{s['nombre']} ({s['id']})"
+            names.append(display)
+            self._scenario_display_map[display] = s['id']
         self._scenario_list = scenarios
 
         if hasattr(self, '_scenario_combo') and self._scenario_combo:
@@ -5109,25 +5122,17 @@ class MiniRemoteApp:
         """Maneja selección de escenario en el combo."""
         pass  # Solo informativo, cargar con botón
 
-    def _load_scenario_to_editor(self):
-        """Carga el escenario seleccionado al editor."""
-        if not hasattr(self, '_scenario_list') or not self._scenario_list:
-            messagebox.showwarning("Escenario", "No hay escenarios disponibles.")
-            return
-
-        selected_name = self._scenario_combo_var.get()
-        scenario = None
-        for s in self._scenario_list:
-            if s['nombre'] == selected_name:
-                scenario = self._scenario_manager.load_scenario(s['id'])
-                break
-
+    def _apply_scenario_to_editor(self, scenario, scenario_id=None):
         if not scenario:
             messagebox.showwarning("Escenario", "No se pudo cargar el escenario.")
             return
 
+        if scenario_id:
+            scenario["id"] = scenario_id
+
+        scenario_name = scenario.get("nombre") or scenario.get("id") or "Sin nombre"
         self._current_scenario_id = scenario.get('id')
-        self._scenario_name_var.set(f"Cargado: {scenario.get('nombre', 'Sin nombre')}")
+        self._scenario_name_var.set(f"Cargado: {scenario_name}")
 
         # Cargar geofence
         gf = scenario.get('geofence', {})
@@ -5184,7 +5189,46 @@ class MiniRemoteApp:
         if hasattr(self, '_draw_mission_map'):
             self._draw_mission_map()
 
-        messagebox.showinfo("Escenario", f"Escenario '{scenario.get('nombre')}' cargado.")
+        messagebox.showinfo("Escenario", f"Escenario '{scenario_name}' cargado.")
+
+    def _load_scenario_from_file(self):
+        """Carga un escenario desde un archivo JSON."""
+        path = filedialog.askopenfilename(
+            initialdir=self._scenario_manager.base_dir,
+            filetypes=[("Escenario JSON", "*.json")]
+        )
+        if not path:
+            return
+
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                scenario = json.load(f)
+
+            scenario_id = scenario.get("id") or os.path.splitext(os.path.basename(path))[0]
+            self._apply_scenario_to_editor(scenario, scenario_id=scenario_id)
+        except Exception as e:
+            messagebox.showerror("Escenario", f"Error cargando escenario: {e}")
+
+    def _load_scenario_to_editor(self):
+        """Carga el escenario seleccionado al editor."""
+        if not hasattr(self, '_scenario_list') or not self._scenario_list:
+            messagebox.showwarning("Escenario", "No hay escenarios disponibles.")
+            return
+
+        selected_name = self._scenario_combo_var.get()
+        scenario_id = None
+        if hasattr(self, "_scenario_display_map"):
+            scenario_id = self._scenario_display_map.get(selected_name)
+        scenario = None
+        if scenario_id:
+            scenario = self._scenario_manager.load_scenario(scenario_id)
+        else:
+            for s in self._scenario_list:
+                if s['nombre'] == selected_name:
+                    scenario = self._scenario_manager.load_scenario(s['id'])
+                    break
+
+        self._apply_scenario_to_editor(scenario)
 
     def _save_scenario_from_editor(self):
         """Guarda el estado actual del editor como escenario."""
@@ -5283,7 +5327,12 @@ class MiniRemoteApp:
     def _refresh_map_scenario_list(self):
         """Refresca la lista de escenarios en ventana Mapa."""
         scenarios = self._scenario_manager.list_scenarios()
-        names = [s['nombre'] for s in scenarios]
+        names = []
+        self._map_scenario_display_map = {}
+        for s in scenarios:
+            display = f"{s['nombre']} ({s['id']})"
+            names.append(display)
+            self._map_scenario_display_map[display] = s['id']
         self._map_scenario_list = scenarios
 
         if hasattr(self, '_map_scenario_combo') and self._map_scenario_combo:
@@ -5298,18 +5347,31 @@ class MiniRemoteApp:
             return
 
         selected_name = self._map_scenario_combo_var.get()
+        scenario_id = None
+        if hasattr(self, "_map_scenario_display_map"):
+            scenario_id = self._map_scenario_display_map.get(selected_name)
         scenario = None
-        for s in self._map_scenario_list:
-            if s['nombre'] == selected_name:
-                scenario = self._scenario_manager.load_scenario(s['id'])
-                break
+        if scenario_id:
+            scenario = self._scenario_manager.load_scenario(scenario_id)
+        else:
+            for s in self._map_scenario_list:
+                if s['nombre'] == selected_name:
+                    scenario = self._scenario_manager.load_scenario(s['id'])
+                    break
 
+        self._apply_scenario_to_map(scenario)
+
+    def _apply_scenario_to_map(self, scenario, scenario_id=None):
         if not scenario:
             messagebox.showwarning("Escenario", "No se pudo cargar el escenario.")
             return
 
+        if scenario_id:
+            scenario["id"] = scenario_id
+
+        scenario_name = scenario.get("nombre") or scenario.get("id") or "Sin nombre"
         self._current_scenario_id = scenario.get('id')
-        self._map_scenario_name_var.set(f"Cargado: {scenario.get('nombre', 'Sin nombre')}")
+        self._map_scenario_name_var.set(f"Cargado: {scenario_name}")
 
         # Cargar geofence a las variables principales
         gf = scenario.get('geofence', {})
@@ -5327,12 +5389,11 @@ class MiniRemoteApp:
             if hasattr(self, '_incl_zmax_var') and self._incl_zmax_var:
                 self._incl_zmax_var.set(int(gf.get('zmax', 200)))
 
-            # Guardar rectángulo de inclusión
-            self._incl_rect = {
-                'x1': gf.get('x1', -100), 'y1': gf.get('y1', -100),
-                'x2': gf.get('x2', 100), 'y2': gf.get('y2', 100),
-                'zmin': gf.get('zmin', 0), 'zmax': gf.get('zmax', 200)
-            }
+            # Guardar rectángulo de inclusión (solo XY)
+            self._incl_rect = (
+                gf.get('x1', -100), gf.get('y1', -100),
+                gf.get('x2', 100), gf.get('y2', 100)
+            )
 
         # Cargar capas
         capas = scenario.get('capas', {})
@@ -5372,7 +5433,25 @@ class MiniRemoteApp:
             self._session_manager._save_session_metadata()
             print(f"[Session] Escenario vinculado (RC): {self._current_scenario_id}")
 
-        messagebox.showinfo("Escenario", f"Escenario '{scenario.get('nombre')}' cargado.")
+        messagebox.showinfo("Escenario", f"Escenario '{scenario_name}' cargado.")
+
+    def _load_scenario_from_file_to_map(self):
+        """Carga un escenario desde archivo en la vista de mapa."""
+        path = filedialog.askopenfilename(
+            initialdir=self._scenario_manager.base_dir,
+            filetypes=[("Escenario JSON", "*.json")]
+        )
+        if not path:
+            return
+
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                scenario = json.load(f)
+
+            scenario_id = scenario.get("id") or os.path.splitext(os.path.basename(path))[0]
+            self._apply_scenario_to_map(scenario, scenario_id=scenario_id)
+        except Exception as e:
+            messagebox.showerror("Escenario", f"Error cargando escenario: {e}")
 
     def _save_scenario_from_map(self):
         """Guarda el estado actual del mapa como escenario."""
@@ -5400,7 +5479,13 @@ class MiniRemoteApp:
 
             # Construir geofence desde _incl_rect o variables
             if self._incl_rect:
-                geofence = self._incl_rect.copy()
+                x1, y1, x2, y2 = self._incl_rect
+                geofence = {
+                    'x1': int(x1), 'y1': int(y1),
+                    'x2': int(x2), 'y2': int(y2),
+                    'zmin': int(self.gf_zmin_var.get() or 0),
+                    'zmax': int(self.gf_zmax_var.get() or 200)
+                }
             else:
                 geofence = {
                     'x1': int(self.gf_x1_var.get() or -100),
@@ -5869,20 +5954,6 @@ class MiniRemoteApp:
                 import time as time_module
 
                 try:
-                    # Forzar reinicio del stream justo en el waypoint para evitar frame congelado
-                    try:
-                        if hasattr(self.dron, "_tello"):
-                            self.dron._tello.streamoff()
-                            time_module.sleep(0.2)
-                            self.dron._tello.streamon()
-                            time_module.sleep(0.3)
-                        if self._cv_cap is not None:
-                            self._cv_cap.release()
-                        self._cv_cap = cv2.VideoCapture("udp://0.0.0.0:11111", cv2.CAP_FFMPEG)
-                        self._cv_cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-                    except Exception:
-                        pass
-
                     # Esperar a un frame nuevo después de llegar al waypoint
                     start_mark = time_module.monotonic()
                     for i in range(30):  # Máximo ~3s
