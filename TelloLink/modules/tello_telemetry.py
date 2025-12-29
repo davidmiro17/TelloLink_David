@@ -216,5 +216,9 @@ def stopTelemetry(self):
     th = getattr(self, "_telemetry_thread", None)
     if th and th.is_alive():
         th.join(timeout=2.0)
+        if th.is_alive():
+            print("[telemetry] WARNING: Thread no terminó después de 2s, continuando...")
+            # No ponemos a None para evitar crear duplicados si se llama a start otra vez
+            return False
     self._telemetry_thread = None
     return True

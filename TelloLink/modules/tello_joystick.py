@@ -1,6 +1,7 @@
 import pygame
 import time
 import os
+import threading
 
 #Permitir eventos de joystick en segundo plano
 os.environ.setdefault("SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS", "1")
@@ -31,6 +32,8 @@ class JoystickController:
         self.expo = expo
 
         self.joystick = None
+        self._lock = threading.Lock()  # Lock para sincronizar acceso
+        self._disconnecting = False
 
     def connect(self, full_reinit: bool = False) -> bool:
         """
@@ -104,12 +107,18 @@ class JoystickController:
         return sign * (abs(value) ** self.expo)
 
     def read_axes(self) -> tuple:
+        # Verificar si se está desconectando
+        if self._disconnecting:
+            return (0, 0, 0, 0)
 
         if not self.joystick:
             return (0, 0, 0, 0)
 
-        # Actualizar eventos de pygame (necesario para leer valores)
-        pygame.event.pump()
+        try:
+            # Actualizar eventos de pygame (necesario para leer valores)
+            pygame.event.pump()
+        except Exception:
+            return (0, 0, 0, 0)
 
         # Leer ejes  del joystick
         left_x = self.joystick.get_axis(self.axis_left_x)
@@ -159,9 +168,16 @@ class JoystickController:
         return self.joystick.get_button(button_index)
 
     def disconnect(self):
-
-        if self.joystick:
-            self.joystick.quit()
-            self.joystick = None
-        pygame.joystick.quit()
-        pygame.quit()
+        """Desconecta el joystick de forma segura."""
+        with self._lock:
+            self._disconnecting = True
+            try:
+                if self.joystick:
+                    self.joystick.quit()
+                    self.joystick = None
+                pygame.joystick.quit()
+                pygame.quit()
+            except Exception as e:
+                print(f"[Joystick] Error al desconectar: {e}")
+            finally:
+                self._disconnecting = False

@@ -82,22 +82,47 @@ def _require_connected(self):
         raise RuntimeError("No hay backend '_tello' inicializado. ¿Llamaste connect()?")
 
 
-def _send(self, cmd: str) -> str:
+def _send(self, cmd: str, timeout: float = None) -> str:
+    """
+    Envía un comando al dron con timeout dinámico.
+
+    Args:
+        cmd: Comando a enviar
+        timeout: Timeout en segundos. Si es None, usa el default.
+                 Comandos largos (go, curve) pueden necesitar hasta 60s.
+    """
     _require_connected(self)
 
-    # djitelopy expone distintos nombres según la versión, con esto nos aseguramos de que funcione con versiones más antiguas
-    if hasattr(self._tello, "send_read_command"):
-        resp = self._tello.send_read_command(cmd)
-        return str(resp)
+    # Guardar timeout original
+    original_timeout = getattr(self._tello, 'RESPONSE_TIMEOUT', 15)
 
-    if hasattr(self._tello, "send_command_with_return"):
-        resp = self._tello.send_command_with_return(cmd)
-        return str(resp)
+    # Ajustar timeout si se especifica
+    if timeout is not None:
+        self._tello.RESPONSE_TIMEOUT = timeout
+    elif cmd.startswith("go ") or cmd.startswith("curve "):
+        # Comandos de movimiento largo: hasta 60s
+        self._tello.RESPONSE_TIMEOUT = 60
+    elif cmd in ("takeoff", "land"):
+        # Despegue/aterrizaje: 20s
+        self._tello.RESPONSE_TIMEOUT = 20
 
-    if hasattr(self._tello, "send_control_command"):
-        res = self._tello.send_control_command(cmd)
-        if isinstance(res, bool):
-            return "ok" if res else "error"
-        return str(res)
+    try:
+        # djitelopy expone distintos nombres según la versión
+        if hasattr(self._tello, "send_read_command"):
+            resp = self._tello.send_read_command(cmd)
+            return str(resp)
 
-    raise RuntimeError("El backend Tello no soporta envío textual en la versión actual.")
+        if hasattr(self._tello, "send_command_with_return"):
+            resp = self._tello.send_command_with_return(cmd)
+            return str(resp)
+
+        if hasattr(self._tello, "send_control_command"):
+            res = self._tello.send_control_command(cmd)
+            if isinstance(res, bool):
+                return "ok" if res else "error"
+            return str(res)
+
+        raise RuntimeError("El backend Tello no soporta envío textual en la versión actual.")
+    finally:
+        # Restaurar timeout original
+        self._tello.RESPONSE_TIMEOUT = original_timeout

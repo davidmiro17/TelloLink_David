@@ -1019,6 +1019,7 @@ class MiniRemoteApp:
             self._start_recording()
 
     def _start_writer(self, size_wh):
+        """Crea el VideoWriter. Retorna True si tuvo éxito, False si falló."""
         self._rec_size = size_wh
         ext = os.path.splitext(self._rec_path)[1].lower()
         if ext == ".avi":
@@ -1032,7 +1033,15 @@ class MiniRemoteApp:
             self._rec_writer = cv2.VideoWriter(alt_path, alt_fourcc, self._rec_fps, self._rec_size)
             if self._rec_writer.isOpened():
                 self._rec_path = alt_path
+
+        # Validar que el writer se abrió correctamente
+        if not self._rec_writer.isOpened():
+            print(f"[_start_writer] ERROR: No se pudo abrir VideoWriter")
+            self._rec_writer = None
+            return False
+
         print(f"[_start_writer] VideoWriter creado: path={self._rec_path}, size={size_wh}, fps={self._rec_fps}")
+        return True
 
     def _recording_thread_func(self):
         """Hilo dedicado para grabación de video, independiente del FPV visual."""
@@ -1126,19 +1135,26 @@ class MiniRemoteApp:
         if need_stream:
             print("[_start_recording] Iniciando stream de video...")
             if not self._ensure_stream_ready(retries=3, wait_s=3.0):
-                print("[_start_recording] WARNING: No se pudo estabilizar el stream")
+                print("[_start_recording] ERROR: No se pudo estabilizar el stream, abortando grabación")
+                self._hud_show("Error: Sin stream", 2.0)
+                return False
 
-        # Esperar a que haya frames disponibles
+        # Esperar a que haya frames disponibles (timeout 5 segundos)
         print("[_start_recording] Esperando frames del stream...")
         max_wait = 50  # 5 segundos máximo
+        frame_found = False
         for i in range(max_wait):
             with self._frame_lock:
                 if self._last_bgr is not None:
                     print(f"[_start_recording] Frame disponible después de {i*0.1:.1f}s")
+                    frame_found = True
                     break
             time.sleep(0.1)
-        else:
-            print("[_start_recording] WARNING: No se pudo obtener frame del stream")
+
+        if not frame_found:
+            print("[_start_recording] ERROR: Timeout esperando frames del stream, abortando grabación")
+            self._hud_show("Error: Sin frames", 2.0)
+            return False
 
         # Iniciar el flag de grabación
         self._rec_running = True
@@ -1154,6 +1170,7 @@ class MiniRemoteApp:
             print("[_start_recording] Grabación delegada al loop de FPV")
 
         self._hud_show("Grabando...", 1.5)
+        return True
 
     def _stop_recording(self):
         if self._rec_running:
@@ -1168,13 +1185,12 @@ class MiniRemoteApp:
 
             video_path = self._rec_path
             try:
-                if self._rec_writer is not None:
+                if self._rec_writer is not None and self._rec_writer.isOpened():
+                    # No rellenamos frames duplicados - causa videos "lentos"
+                    # Solo informamos si hubo menos frames de los esperados
                     if self._rec_expected_frames and self._rec_frame_count < self._rec_expected_frames:
-                        remaining = self._rec_expected_frames - self._rec_frame_count
-                        if self._rec_last_good_frame is not None and remaining > 0:
-                            for _ in range(remaining):
-                                self._rec_writer.write(self._rec_last_good_frame)
-                            self._rec_frame_count += remaining
+                        missing = self._rec_expected_frames - self._rec_frame_count
+                        print(f"[_stop_recording] INFO: {missing} frames menos de los esperados (sin relleno)")
                     frames_recorded = self._rec_frame_count
                     print(f"[_stop_recording] Liberando writer, guardando video en {video_path}")
                     print(f"[_stop_recording] Total frames escritos: {frames_recorded}")
@@ -3131,6 +3147,7 @@ class MiniRemoteApp:
         self._gallery_filter = tk.StringVar(value="all")
         self._gallery_thumbnails = []
         self._gallery_media_list = []
+        self._gallery_media_lock = threading.Lock()  # Lock para acceso seguro
 
         # Colores del tema (consistente con mapa)
         BG_CARD = "#f8f9fa"
@@ -3144,63 +3161,48 @@ class MiniRemoteApp:
         left_panel.pack(side="left", fill="y", padx=10, pady=10)
         left_panel.pack_propagate(False)
 
-        # Sección SESIONES
-        sessions_card = tk.Frame(left_panel, bg=BG_CARD)
-        sessions_card.pack(fill="x", padx=4, pady=4)
+        # Sección NAVEGACIÓN JERÁRQUICA
+        nav_card = tk.Frame(left_panel, bg=BG_CARD)
+        nav_card.pack(fill="both", expand=True, padx=4, pady=4)
 
-        tk.Label(sessions_card, text="  SESIONES DE VUELO", font=("Arial", 9, "bold"),
+        tk.Label(nav_card, text="  NAVEGACIÓN", font=("Arial", 9, "bold"),
                  bg=BG_HEADER, fg=FG_HEADER, anchor="w").pack(fill="x", ipady=4)
 
-        # Lista de sesiones con scroll
-        sessions_container = tk.Frame(sessions_card, bg=BG_CARD)
-        sessions_container.pack(fill="both", expand=True, padx=4, pady=4)
+        # Treeview jerárquico: Escenario → Plan/Manual → Sesiones
+        tree_container = tk.Frame(nav_card, bg=BG_CARD)
+        tree_container.pack(fill="both", expand=True, padx=4, pady=4)
 
-        sessions_canvas = tk.Canvas(sessions_container, bg=BG_CARD, highlightthickness=0, height=350)
-        sessions_scrollbar = tk.Scrollbar(sessions_container, orient="vertical", command=sessions_canvas.yview)
-        self._sessions_frame = tk.Frame(sessions_canvas, bg=BG_CARD)
+        # Estilo para el Treeview
+        style = ttk.Style()
+        style.configure("Gallery.Treeview", rowheight=24, font=("Arial", 9))
+        style.configure("Gallery.Treeview.Heading", font=("Arial", 9, "bold"))
 
-        self._sessions_frame.bind("<Configure>", lambda e: sessions_canvas.configure(scrollregion=sessions_canvas.bbox("all")))
-        sessions_canvas.create_window((0, 0), window=self._sessions_frame, anchor="nw", width=220)
-        sessions_canvas.configure(yscrollcommand=sessions_scrollbar.set)
+        tree_scroll = tk.Scrollbar(tree_container, orient="vertical")
+        self._gallery_tree = ttk.Treeview(tree_container, style="Gallery.Treeview",
+                                           yscrollcommand=tree_scroll.set, selectmode="browse")
+        tree_scroll.configure(command=self._gallery_tree.yview)
 
-        sessions_scrollbar.pack(side="right", fill="y")
-        sessions_canvas.pack(side="left", fill="both", expand=True)
+        self._gallery_tree.heading("#0", text="Estructura", anchor="w")
+        self._gallery_tree.column("#0", width=220, stretch=True)
 
-        # Sección FILTRAR
+        tree_scroll.pack(side="right", fill="y")
+        self._gallery_tree.pack(side="left", fill="both", expand=True)
+
+        # Evento de selección
+        self._gallery_tree.bind("<<TreeviewSelect>>", self._gallery_on_tree_select)
+
+        # Sección FILTRAR CONTENIDO
         filter_card = tk.Frame(left_panel, bg=BG_CARD, bd=1, relief="solid")
         filter_card.pack(fill="x", padx=4, pady=(10, 4))
 
-        tk.Label(filter_card, text="  FILTRAR", font=("Arial", 9, "bold"),
+        tk.Label(filter_card, text="  FILTRAR CONTENIDO", font=("Arial", 9, "bold"),
                  bg=BG_HEADER, fg=FG_HEADER, anchor="w").pack(fill="x", ipady=4)
 
         filter_content = tk.Frame(filter_card, bg=BG_CARD)
         filter_content.pack(fill="x", padx=8, pady=8)
 
-        # Filtro por escenario
-        tk.Label(filter_content, text="Escenario:", bg=BG_CARD, font=("Arial", 8)).pack(anchor="w")
-        self._gallery_scenario_filter = tk.StringVar(value="todos")
-        self._gallery_scenario_combo = ttk.Combobox(filter_content, textvariable=self._gallery_scenario_filter,
-                                                     width=20, state="readonly")
-        self._gallery_scenario_combo.pack(fill="x", pady=(2, 8))
-        self._gallery_scenario_combo.bind("<<ComboboxSelected>>", lambda e: self._gallery_refresh())
-
-        # Filtro por tipo de vuelo
-        tk.Label(filter_content, text="Tipo de vuelo:", bg=BG_CARD, font=("Arial", 8)).pack(anchor="w")
-        self._gallery_type_filter = tk.StringVar(value="todos")
-        type_frame = tk.Frame(filter_content, bg=BG_CARD)
-        type_frame.pack(fill="x", pady=(2, 8))
-        tk.Radiobutton(type_frame, text="Todos", variable=self._gallery_type_filter, value="todos",
-                       bg=BG_CARD, activebackground=BG_CARD, font=("Arial", 8),
-                       command=self._gallery_refresh).pack(side="left")
-        tk.Radiobutton(type_frame, text="Plan", variable=self._gallery_type_filter, value="plan",
-                       bg=BG_CARD, activebackground=BG_CARD, font=("Arial", 8),
-                       command=self._gallery_refresh).pack(side="left")
-        tk.Radiobutton(type_frame, text="Manual", variable=self._gallery_type_filter, value="manual",
-                       bg=BG_CARD, activebackground=BG_CARD, font=("Arial", 8),
-                       command=self._gallery_refresh).pack(side="left")
-
         # Filtro por tipo de media
-        tk.Label(filter_content, text="Contenido:", bg=BG_CARD, font=("Arial", 8)).pack(anchor="w", pady=(4, 0))
+        tk.Label(filter_content, text="Mostrar:", bg=BG_CARD, font=("Arial", 8)).pack(anchor="w", pady=(4, 0))
         tk.Radiobutton(filter_content, text="📁 Todo", variable=self._gallery_filter, value="all",
                        bg=BG_CARD, activebackground=BG_CARD, font=("Arial", 9),
                        command=self._gallery_apply_filter).pack(anchor="w")
@@ -3256,105 +3258,192 @@ class MiniRemoteApp:
         self._gallery_refresh()
 
     def _gallery_refresh(self):
-        """Refresca la lista de sesiones con filtros."""
-        for widget in self._sessions_frame.winfo_children():
-            widget.destroy()
+        """Refresca el árbol jerárquico de sesiones."""
+        # Limpiar árbol existente
+        for item in self._gallery_tree.get_children():
+            self._gallery_tree.delete(item)
 
-        # Actualizar combo de escenarios
+        # Obtener datos
         scenarios = self._scenario_manager.list_scenarios()
-        scenario_names = ["(Todos)"] + [s['nombre'] for s in scenarios]
-        self._gallery_scenarios_data = {s['nombre']: s['id'] for s in scenarios}
-
-        if hasattr(self, '_gallery_scenario_combo') and self._gallery_scenario_combo:
-            self._gallery_scenario_combo['values'] = scenario_names
-            if not self._gallery_scenario_filter.get() or self._gallery_scenario_filter.get() == "todos":
-                self._gallery_scenario_filter.set("(Todos)")
-
-        # Obtener sesiones
         sessions = self._session_manager.list_sessions()
 
-        if not sessions:
-            tk.Label(self._sessions_frame, text="No hay sesiones",
-                     font=("Arial", 9, "italic"), fg="#888", bg="#f8f9fa").pack(pady=20)
-            return
+        # Mapear escenarios por ID
+        scenario_map = {s['id']: s for s in scenarios}
+        self._gallery_scenarios_data = {s['id']: s for s in scenarios}
 
-        # Aplicar filtros
-        scenario_filter = self._gallery_scenario_filter.get() if hasattr(self, '_gallery_scenario_filter') else "(Todos)"
-        type_filter = self._gallery_type_filter.get() if hasattr(self, '_gallery_type_filter') else "todos"
+        # Estructura: {escenario_id: {plan_id/None: [sessions]}}
+        hierarchy = {}
 
-        filtered_sessions = []
         for session in sessions:
-            # Filtrar por escenario
-            if scenario_filter != "(Todos)":
-                scenario_id = self._gallery_scenarios_data.get(scenario_filter)
-                if session.get("escenario_id") != scenario_id:
-                    continue
+            esc_id = session.get("escenario_id") or "_sin_escenario_"
+            plan_id = session.get("plan_id")
+            tipo = session.get("tipo", "manual")
 
-            # Filtrar por tipo
-            if type_filter != "todos":
-                session_type = session.get("tipo", "manual")
-                if session_type != type_filter:
-                    continue
+            if esc_id not in hierarchy:
+                hierarchy[esc_id] = {"planes": {}, "manuales": []}
 
-            filtered_sessions.append(session)
+            if tipo == "plan" and plan_id:
+                if plan_id not in hierarchy[esc_id]["planes"]:
+                    hierarchy[esc_id]["planes"][plan_id] = []
+                hierarchy[esc_id]["planes"][plan_id].append(session)
+            else:
+                hierarchy[esc_id]["manuales"].append(session)
 
-        if not filtered_sessions:
-            tk.Label(self._sessions_frame, text="No hay sesiones\ncon estos filtros",
-                     font=("Arial", 9, "italic"), fg="#888", bg="#f8f9fa").pack(pady=20)
-            return
+        # Poblar el Treeview
+        self._gallery_session_map = {}  # Para mapear iid a session_id
 
-        for session in filtered_sessions:
-            self._create_session_item(session)
+        for esc_id, data in hierarchy.items():
+            # Nodo de escenario
+            if esc_id == "_sin_escenario_":
+                esc_name = "(Sin escenario)"
+                esc_icon = "📦"
+            else:
+                esc_info = scenario_map.get(esc_id, {})
+                esc_name = esc_info.get("nombre", esc_id)
+                esc_icon = "📁"
 
-    def _create_session_item(self, session):
-        """Crea un item de sesión en la lista."""
+            total_sessions = len(data["manuales"]) + sum(len(v) for v in data["planes"].values())
+            esc_text = f"{esc_icon} {esc_name} ({total_sessions})"
+            esc_node = self._gallery_tree.insert("", "end", text=esc_text, open=True,
+                                                  tags=("escenario",))
+
+            # Nodos de planes de vuelo
+            for plan_id, plan_sessions in data["planes"].items():
+                plan_text = f"📋 Plan: {plan_id} ({len(plan_sessions)})"
+                plan_node = self._gallery_tree.insert(esc_node, "end", text=plan_text, open=False,
+                                                       tags=("plan",))
+                # Sesiones del plan
+                for session in plan_sessions:
+                    session_text = self._format_session_text(session)
+                    session_iid = self._gallery_tree.insert(plan_node, "end", text=session_text,
+                                                             tags=("session",))
+                    self._gallery_session_map[session_iid] = session["id"]
+
+            # Nodo de vuelos manuales
+            if data["manuales"]:
+                manual_text = f"🎮 Vuelos Manuales ({len(data['manuales'])})"
+                manual_node = self._gallery_tree.insert(esc_node, "end", text=manual_text, open=False,
+                                                         tags=("manual",))
+                for session in data["manuales"]:
+                    session_text = self._format_session_text(session)
+                    session_iid = self._gallery_tree.insert(manual_node, "end", text=session_text,
+                                                             tags=("session",))
+                    self._gallery_session_map[session_iid] = session["id"]
+
+    def _format_session_text(self, session):
+        """Formatea el texto de una sesión para el árbol."""
         session_id = session["id"]
-        photos = session["photos_count"]
-        videos = session["videos_count"]
-        escenario_id = session.get("escenario_id", "")
-        tipo = session.get("tipo", "manual")
+        photos = session.get("photos_count", 0)
+        videos = session.get("videos_count", 0)
 
         if session_id == "legacy":
-            date_str = "📦 Archivos antiguos"
-        else:
-            try:
-                parts = session_id.split("_")
-                date_str = f"📅 {parts[0]}  🕐 {parts[1].replace('-', ':')}"
-            except:
-                date_str = session_id
+            return f"📦 Archivos antiguos ({photos}📷 {videos}🎬)"
 
-        is_selected = self._gallery_selected_session.get() == session_id
-        bg_color = "#d4edda" if is_selected else "#f8f9fa"
+        try:
+            parts = session_id.split("_")
+            date_str = parts[0]
+            time_str = parts[1].replace("-", ":") if len(parts) > 1 else ""
+            return f"📅 {date_str} {time_str} ({photos}📷 {videos}🎬)"
+        except:
+            return f"📅 {session_id} ({photos}📷 {videos}🎬)"
 
-        item_frame = tk.Frame(self._sessions_frame, bg=bg_color, bd=1, relief="solid", cursor="hand2")
-        item_frame.pack(fill="x", pady=2)
+    def _gallery_on_tree_select(self, event):
+        """Maneja la selección en el árbol jerárquico."""
+        selection = self._gallery_tree.selection()
+        if not selection:
+            return
 
-        tk.Label(item_frame, text=date_str, font=("Arial", 9, "bold"),
-                 bg=bg_color, fg="#333", anchor="w").pack(fill="x", padx=6, pady=(4, 0))
+        selected_iid = selection[0]
+        tags = self._gallery_tree.item(selected_iid, "tags")
 
-        # Mostrar escenario y tipo
-        tipo_icon = "📋" if tipo == "plan" else "🎮"
-        tipo_text = "Plan" if tipo == "plan" else "Manual"
-        escenario_text = escenario_id if escenario_id else "(sin escenario)"
-        tk.Label(item_frame, text=f"{tipo_icon} {tipo_text}  •  {escenario_text}",
-                 font=("Arial", 7), bg=bg_color, fg="#888", anchor="w").pack(fill="x", padx=6)
+        if "session" in tags:
+            # Es una sesión - cargar media
+            session_id = self._gallery_session_map.get(selected_iid)
+            if session_id:
+                self._gallery_selected_session.set(session_id)
+                self._gallery_load_media(session_id)
+        elif "plan" in tags or "manual" in tags:
+            # Es un nodo de plan/manual - mostrar todas las sesiones de ese grupo
+            self._gallery_load_group_media(selected_iid)
+        elif "escenario" in tags:
+            # Es un escenario - mostrar todas las sesiones del escenario
+            self._gallery_load_scenario_media(selected_iid)
 
-        tk.Label(item_frame, text=f"📷 {photos}  🎬 {videos}",
-                 font=("Arial", 8), bg=bg_color, fg="#666", anchor="w").pack(fill="x", padx=6, pady=(0, 4))
+    def _gallery_load_group_media(self, group_iid):
+        """Carga media de todas las sesiones de un grupo (plan o manual)."""
+        all_media = []
+        children = self._gallery_tree.get_children(group_iid)
 
-        def on_click(e, sid=session_id):
-            self._gallery_selected_session.set(sid)
-            self._gallery_refresh()
-            self._gallery_load_media(sid)
+        for child_iid in children:
+            session_id = self._gallery_session_map.get(child_iid)
+            if session_id:
+                filter_type = self._gallery_filter.get()
+                media = self._session_manager.get_session_media(session_id, filter_type)
+                all_media.extend(media)
 
-        item_frame.bind("<Button-1>", on_click)
-        for child in item_frame.winfo_children():
-            child.bind("<Button-1>", on_click)
+        # Ordenar por fecha
+        all_media.sort(key=lambda x: x.get("modified_time", ""), reverse=True)
+
+        group_text = self._gallery_tree.item(group_iid, "text")
+        self._gallery_header.configure(text=f"{group_text}  •  {len(all_media)} archivos")
+
+        with self._gallery_media_lock:
+            self._gallery_media_list = all_media
+
+        self._gallery_thumbnails.clear()
+        for widget in self._thumb_frame.winfo_children():
+            widget.destroy()
+
+        if not all_media:
+            tk.Label(self._thumb_frame, text="No hay archivos en este grupo",
+                     font=("Arial", 10, "italic"), fg="#888", bg="#ffffff").pack(pady=50)
+            return
+
+        self._create_thumbnail_grid()
+
+    def _gallery_load_scenario_media(self, esc_iid):
+        """Carga media de todas las sesiones de un escenario."""
+        all_media = []
+
+        def collect_sessions(parent_iid):
+            for child_iid in self._gallery_tree.get_children(parent_iid):
+                tags = self._gallery_tree.item(child_iid, "tags")
+                if "session" in tags:
+                    session_id = self._gallery_session_map.get(child_iid)
+                    if session_id:
+                        filter_type = self._gallery_filter.get()
+                        media = self._session_manager.get_session_media(session_id, filter_type)
+                        all_media.extend(media)
+                else:
+                    collect_sessions(child_iid)
+
+        collect_sessions(esc_iid)
+
+        # Ordenar por fecha
+        all_media.sort(key=lambda x: x.get("modified_time", ""), reverse=True)
+
+        esc_text = self._gallery_tree.item(esc_iid, "text")
+        self._gallery_header.configure(text=f"{esc_text}  •  {len(all_media)} archivos")
+
+        with self._gallery_media_lock:
+            self._gallery_media_list = all_media
+
+        self._gallery_thumbnails.clear()
+        for widget in self._thumb_frame.winfo_children():
+            widget.destroy()
+
+        if not all_media:
+            tk.Label(self._thumb_frame, text="No hay archivos en este escenario",
+                     font=("Arial", 10, "italic"), fg="#888", bg="#ffffff").pack(pady=50)
+            return
+
+        self._create_thumbnail_grid()
 
     def _gallery_load_media(self, session_id):
         """Carga los archivos multimedia de una sesión."""
         filter_type = self._gallery_filter.get()
-        self._gallery_media_list = self._session_manager.get_session_media(session_id, filter_type)
+        with self._gallery_media_lock:
+            self._gallery_media_list = self._session_manager.get_session_media(session_id, filter_type)
 
         count = len(self._gallery_media_list)
         filter_text = {"all": "archivos", "photos": "fotos", "videos": "vídeos"}[filter_type]
@@ -3389,12 +3478,13 @@ class MiniRemoteApp:
                     img = Image.open(media["path"])
                     img.thumbnail((THUMB_SIZE, THUMB_SIZE))
                     photo = ImageTk.PhotoImage(img)
+                    img.close()  # Liberar memoria de PIL
                     label = tk.Label(thumb_frame, image=photo, bg="#eee", bd=2, relief="solid")
                     label.image = photo
                 else:
                     label = tk.Label(thumb_frame, text="🎬", font=("Arial", 40),
                                      width=8, height=4, bg="#333", fg="white", bd=2, relief="solid")
-            except:
+            except Exception:
                 label = tk.Label(thumb_frame, text="❌", font=("Arial", 30),
                                  width=8, height=4, bg="#fee", bd=2, relief="solid")
 
@@ -3570,8 +3660,13 @@ class MiniRemoteApp:
         img = Image.fromarray(frame_rgb)
         img.thumbnail((750, 500), Image.Resampling.LANCZOS)
         photo = ImageTk.PhotoImage(img)
+        # Liberar imagen anterior para evitar memory leak
+        if hasattr(self._viewer_label, 'image') and self._viewer_label.image:
+            del self._viewer_label.image
         self._viewer_label.configure(image=photo, text="")
         self._viewer_label.image = photo
+        # Cerrar imagen PIL
+        img.close()
 
     def _format_time(self, seconds):
         """Formatea segundos a MM:SS."""
@@ -3684,19 +3779,22 @@ class MiniRemoteApp:
         # Liberar el archivo si es video (para que Windows permita borrarlo)
         self._stop_video_playback()
 
-        media = self._gallery_media_list[self._viewer_index]
-        if self._session_manager.delete_media(media["path"]):
-            self._gallery_media_list.pop(self._viewer_index)
-            if not self._gallery_media_list:
-                viewer.destroy()
-                self._gallery_apply_filter()
+        with self._gallery_media_lock:
+            if self._viewer_index < 0 or self._viewer_index >= len(self._gallery_media_list):
                 return
-            if self._viewer_index >= len(self._gallery_media_list):
-                self._viewer_index = len(self._gallery_media_list) - 1
-            self._viewer_show(viewer)
-            self._gallery_apply_filter()
-        else:
-            messagebox.showerror("Error", "No se pudo eliminar el archivo")
+            media = self._gallery_media_list[self._viewer_index]
+            if self._session_manager.delete_media(media["path"]):
+                self._gallery_media_list.pop(self._viewer_index)
+                if not self._gallery_media_list:
+                    viewer.destroy()
+                    self._gallery_apply_filter()
+                    return
+                if self._viewer_index >= len(self._gallery_media_list):
+                    self._viewer_index = len(self._gallery_media_list) - 1
+                self._viewer_show(viewer)
+                self._gallery_apply_filter()
+            else:
+                messagebox.showerror("Error", "No se pudo eliminar el archivo")
 
     def _viewer_open_folder(self):
         """Abre la carpeta del archivo en el explorador."""
@@ -5325,16 +5423,16 @@ class MiniRemoteApp:
             try:
                 if self._mission_canvas.winfo_exists():
                     self._draw_mission_map()
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"[_apply_scenario] Error redibujando editor: {e}")
 
         # Redibujar Abrir Mapa si está abierto
         if self._map_win:
             try:
-                if tk.Toplevel.winfo_exists(self._map_win):
+                if self._map_win.winfo_exists():
                     self._redraw_map_static()
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"[_apply_scenario] Error redibujando mapa: {e}")
 
         # Vincular escenario a la sesión activa si corresponde
         if source == "map" and self._session_manager.is_session_active():
@@ -5467,11 +5565,24 @@ class MiniRemoteApp:
         # Intentar desde _incl_rect (Abrir Mapa)
         elif hasattr(self, '_incl_rect') and self._incl_rect:
             x1, y1, x2, y2 = self._incl_rect
+            # Obtener zmin/zmax de forma segura
+            zmin_val = 0
+            zmax_val = 200
+            if hasattr(self, 'gf_zmin_var') and self.gf_zmin_var:
+                try:
+                    zmin_val = int(self.gf_zmin_var.get() or 0)
+                except (ValueError, TypeError):
+                    zmin_val = 0
+            if hasattr(self, 'gf_zmax_var') and self.gf_zmax_var:
+                try:
+                    zmax_val = int(self.gf_zmax_var.get() or 200)
+                except (ValueError, TypeError):
+                    zmax_val = 200
             geofence = {
                 'x1': int(x1), 'y1': int(y1),
                 'x2': int(x2), 'y2': int(y2),
-                'zmin': int(getattr(self, 'gf_zmin_var', None) and self.gf_zmin_var.get() or 0),
-                'zmax': int(getattr(self, 'gf_zmax_var', None) and self.gf_zmax_var.get() or 200)
+                'zmin': zmin_val,
+                'zmax': zmax_val
             }
         # Intentar desde las variables de entrada
         elif hasattr(self, 'gf_x1_var') and self.gf_x1_var:
@@ -5490,10 +5601,19 @@ class MiniRemoteApp:
         # ─────────────────────────────────────────────────────────────────────
         # CAPAS
         # ─────────────────────────────────────────────────────────────────────
+        def safe_get_layer(attr_name, default):
+            var = getattr(self, attr_name, None)
+            if var:
+                try:
+                    return int(var.get() or default)
+                except (ValueError, TypeError):
+                    return default
+            return default
+
         capas = {
-            'c1_max': getattr(self, '_layer1_max_var', None) and self._layer1_max_var.get() or 60,
-            'c2_max': getattr(self, '_layer2_max_var', None) and self._layer2_max_var.get() or 120,
-            'c3_max': getattr(self, '_layer3_max_var', None) and self._layer3_max_var.get() or 200
+            'c1_max': safe_get_layer('_layer1_max_var', 60),
+            'c2_max': safe_get_layer('_layer2_max_var', 120),
+            'c3_max': safe_get_layer('_layer3_max_var', 200)
         }
 
         # ─────────────────────────────────────────────────────────────────────
@@ -5650,13 +5770,24 @@ class MiniRemoteApp:
 
     def _mission_apply_geofence(self):
         """Aplica el geofence configurado."""
+        # Obtener valores
+        zmin = int(self.gf_zmin_var.get() or 0)
+        zmax = int(self.gf_zmax_var.get() or 200)
+
+        # Validar que zmin <= zmax
+        if zmin > zmax:
+            zmin, zmax = zmax, zmin
+            self.gf_zmin_var.set(str(zmin))
+            self.gf_zmax_var.set(str(zmax))
+            print(f"[geofence] Corregido: zmin/zmax intercambiados → {zmin}-{zmax}")
+
         self._mission_geofence = {
             'x1': min(int(self.gf_x1_var.get() or -100), int(self.gf_x2_var.get() or 100)),
             'y1': min(int(self.gf_y1_var.get() or -100), int(self.gf_y2_var.get() or 100)),
             'x2': max(int(self.gf_x1_var.get() or -100), int(self.gf_x2_var.get() or 100)),
             'y2': max(int(self.gf_y1_var.get() or -100), int(self.gf_y2_var.get() or 100)),
-            'zmin': int(self.gf_zmin_var.get() or 0),
-            'zmax': int(self.gf_zmax_var.get() or 200)
+            'zmin': zmin,
+            'zmax': zmax
         }
         self._draw_mission_map()
 
@@ -5902,14 +6033,22 @@ class MiniRemoteApp:
         if has_video and not self._fpv_running:
             print("[mission] Preparando stream FPV para grabación...")
             self.start_fpv()
-            for i in range(50):
+            stream_ready = False
+            for i in range(50):  # Timeout 5 segundos
                 with self._frame_lock:
                     if self._last_bgr is not None:
                         print(f"[mission] Stream listo después de {i*0.1:.1f}s")
+                        stream_ready = True
                         break
                 time.sleep(0.1)
-            else:
-                print("[mission] WARNING: Timeout esperando frame del stream")
+
+            if not stream_ready:
+                print("[mission] ERROR: Timeout esperando frame del stream")
+                if not messagebox.askyesno("Sin Stream",
+                        "No se pudo iniciar el stream de video.\n"
+                        "¿Continuar la misión sin grabar videos?",
+                        parent=self._mission_win):
+                    return
 
         # Registrar la sesión como misión aunque no haya escenario cargado
         if self._session_manager.is_session_active():

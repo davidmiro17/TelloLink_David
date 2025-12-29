@@ -178,7 +178,7 @@ class ScenarioManager:
                 except Exception:
                     pass
 
-        return sorted(scenarios, key=lambda x: x.get("modified", ""), reverse=True)
+        return sorted(scenarios, key=lambda x: x.get("modified") or "", reverse=True)
 
     # =========================================================================
     # Gestión de Planes de Vuelo dentro de un Escenario
