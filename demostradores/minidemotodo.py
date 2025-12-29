@@ -15,7 +15,7 @@ def _silence_all_popups():
 _silence_all_popups()
 
 import tkinter as tk
-from tkinter import messagebox, filedialog, ttk
+from tkinter import messagebox, filedialog, ttk, simpledialog
 import threading
 import time
 import sys
@@ -733,33 +733,60 @@ class MiniRemoteApp:
 
     def _clear_geofence(self):
         """Limpia la zona de geofence dibujada."""
-        # Limpiar variables
-        self.gf_x1_var.set("-100")
-        self.gf_y1_var.set("-100")
-        self.gf_x2_var.set("100")
-        self.gf_y2_var.set("100")
-        self._incl_rect = None
-        self._mission_geofence = None
+        try:
+            # Limpiar variables
+            self.gf_x1_var.set("-100")
+            self.gf_y1_var.set("-100")
+            self.gf_x2_var.set("100")
+            self.gf_y2_var.set("100")
+            self._incl_rect = None
+            self._mission_geofence = None
 
-        # Desactivar geofence
-        if hasattr(self.dron, "disable_geofence"):
-            self.dron.disable_geofence()
-        else:
-            setattr(self.dron, "_gf_enabled", False)
-            setattr(self.dron, "_gf_limits", {})
+            # Desactivar geofence
+            if hasattr(self.dron, "disable_geofence"):
+                self.dron.disable_geofence()
+            else:
+                setattr(self.dron, "_gf_enabled", False)
+                setattr(self.dron, "_gf_limits", {})
 
-        # Limpiar puntos temporales
-        if hasattr(self, '_gf_pts'):
-            self._gf_pts.clear()
-        if self.map_canvas:
-            self.map_canvas.delete("gf_temp")
-            self.map_canvas.delete("inclusion")
+            # Limpiar puntos temporales
+            if hasattr(self, '_gf_pts'):
+                self._gf_pts.clear()
+            if hasattr(self, '_mission_gf_pts'):
+                self._mission_gf_pts.clear()
 
-        self._hud_show("Geofence limpiado", 1.5)
-        if self._map_win and tk.Toplevel.winfo_exists(self._map_win):
-            self._redraw_map_static()
-        if hasattr(self, '_mission_canvas') and self._mission_canvas and self._mission_canvas.winfo_exists():
-            self._draw_mission_map()
+            # Limpiar canvas del mapa si existe
+            if hasattr(self, 'map_canvas') and self.map_canvas:
+                try:
+                    self.map_canvas.delete("gf_temp")
+                    self.map_canvas.delete("inclusion")
+                except Exception:
+                    pass
+
+            # Limpiar canvas del editor si existe
+            if hasattr(self, '_mission_canvas') and self._mission_canvas:
+                try:
+                    self._mission_canvas.delete("gf_temp")
+                except Exception:
+                    pass
+
+            self._hud_show("Geofence limpiado", 1.5)
+
+            # Redibujar mapa si está abierto
+            try:
+                if self._map_win and self._map_win.winfo_exists():
+                    self._redraw_map_static()
+            except Exception:
+                pass
+
+            # Redibujar editor si está abierto
+            try:
+                if hasattr(self, '_mission_canvas') and self._mission_canvas and self._mission_canvas.winfo_exists():
+                    self._draw_mission_map()
+            except Exception:
+                pass
+        except Exception as e:
+            print(f"[clear_geofence] Error: {e}")
 
     def _restart_gf_monitor(self, force=False):
         try:
@@ -5432,17 +5459,22 @@ class MiniRemoteApp:
         # ─────────────────────────────────────────────────────────────────────
         # GEOFENCE
         # ─────────────────────────────────────────────────────────────────────
-        if self._mission_geofence:
+        geofence = None
+
+        # Intentar desde _mission_geofence (Editor)
+        if hasattr(self, '_mission_geofence') and self._mission_geofence:
             geofence = dict(self._mission_geofence)
-        elif self._incl_rect:
+        # Intentar desde _incl_rect (Abrir Mapa)
+        elif hasattr(self, '_incl_rect') and self._incl_rect:
             x1, y1, x2, y2 = self._incl_rect
             geofence = {
                 'x1': int(x1), 'y1': int(y1),
                 'x2': int(x2), 'y2': int(y2),
-                'zmin': int(self.gf_zmin_var.get() or 0),
-                'zmax': int(self.gf_zmax_var.get() or 200)
+                'zmin': int(getattr(self, 'gf_zmin_var', None) and self.gf_zmin_var.get() or 0),
+                'zmax': int(getattr(self, 'gf_zmax_var', None) and self.gf_zmax_var.get() or 200)
             }
-        else:
+        # Intentar desde las variables de entrada
+        elif hasattr(self, 'gf_x1_var') and self.gf_x1_var:
             geofence = {
                 'x1': int(self.gf_x1_var.get() or -100),
                 'y1': int(self.gf_y1_var.get() or -100),
@@ -5451,14 +5483,17 @@ class MiniRemoteApp:
                 'zmin': int(self.gf_zmin_var.get() or 0),
                 'zmax': int(self.gf_zmax_var.get() or 200)
             }
+        else:
+            # Valores por defecto
+            geofence = {'x1': -100, 'y1': -100, 'x2': 100, 'y2': 100, 'zmin': 0, 'zmax': 200}
 
         # ─────────────────────────────────────────────────────────────────────
         # CAPAS
         # ─────────────────────────────────────────────────────────────────────
         capas = {
-            'c1_max': self._layer1_max_var.get() if self._layer1_max_var else 60,
-            'c2_max': self._layer2_max_var.get() if self._layer2_max_var else 120,
-            'c3_max': self._layer3_max_var.get() if self._layer3_max_var else 200
+            'c1_max': getattr(self, '_layer1_max_var', None) and self._layer1_max_var.get() or 60,
+            'c2_max': getattr(self, '_layer2_max_var', None) and self._layer2_max_var.get() or 120,
+            'c3_max': getattr(self, '_layer3_max_var', None) and self._layer3_max_var.get() or 200
         }
 
         # ─────────────────────────────────────────────────────────────────────
@@ -5467,8 +5502,8 @@ class MiniRemoteApp:
         circles = []
         polygons = []
 
-        # Priorizar _mission_exclusions si tiene datos
-        if self._mission_exclusions:
+        # Priorizar _mission_exclusions si tiene datos (Editor)
+        if hasattr(self, '_mission_exclusions') and self._mission_exclusions:
             for exc in self._mission_exclusions:
                 if exc.get('type') == 'circle':
                     circles.append({
@@ -5502,8 +5537,10 @@ class MiniRemoteApp:
                     })
             if hasattr(self, '_excl_polys') and self._excl_polys:
                 for p in self._excl_polys:
+                    # Manejar ambos formatos: 'poly' o 'points'
+                    pts = p.get('poly') or p.get('points', [])
                     polygons.append({
-                        'poly': p['points'],
+                        'poly': pts,
                         'zmin': p.get('zmin', 0), 'zmax': p.get('zmax', 60)
                     })
 
@@ -5513,42 +5550,45 @@ class MiniRemoteApp:
 
     def _save_scenario_from_map(self):
         """Guarda el estado actual del mapa como escenario."""
-        self._show_save_dialog(self._map_win, "map")
+        parent = getattr(self, '_map_win', None) or self.root
+        self._show_save_scenario_dialog(include_waypoints=False, parent=parent)
 
     def _save_scenario_from_editor(self):
         """Guarda el estado actual del editor como escenario."""
-        self._show_save_dialog(self._mission_win, "editor")
+        parent = getattr(self, '_mission_win', None) or self.root
+        self._show_save_scenario_dialog(include_waypoints=True, parent=parent)
 
-    def _show_save_dialog(self, parent_win, source):
-        """Muestra el diálogo de guardado."""
-        # Usar ventana principal si la ventana padre no está disponible
-        try:
-            if parent_win and parent_win.winfo_exists():
-                parent = parent_win
-            else:
-                parent = self.root
-        except Exception:
+    def _show_save_scenario_dialog(self, include_waypoints=False, parent=None):
+        """Muestra diálogo para guardar escenario."""
+        if parent is None:
             parent = self.root
 
+        # Crear diálogo
         dialog = tk.Toplevel(parent)
         dialog.title("Guardar Escenario")
         dialog.geometry("300x120")
+        dialog.resizable(False, False)
         dialog.transient(parent)
-        dialog.grab_set()
-        dialog.focus_set()
+        dialog.attributes('-topmost', True)
 
-        # Solo pedir el nombre (el ID se genera automáticamente)
-        tk.Label(dialog, text="Nombre del escenario:").pack(pady=(15, 5))
-        name_var = tk.StringVar(value="Nuevo Escenario")
-        entry = tk.Entry(dialog, textvariable=name_var, width=30)
+        # Centrar en pantalla
+        dialog.update_idletasks()
+        x = (dialog.winfo_screenwidth() - 300) // 2
+        y = (dialog.winfo_screenheight() - 120) // 2
+        dialog.geometry(f"300x120+{x}+{y}")
+
+        # Contenido
+        tk.Label(dialog, text="Nombre del escenario:", font=("Arial", 10)).pack(pady=(15, 5))
+        entry = tk.Entry(dialog, width=35, font=("Arial", 10))
+        entry.insert(0, "Nuevo Escenario")
         entry.pack(pady=5)
         entry.select_range(0, tk.END)
         entry.focus_set()
 
         def do_save():
-            nombre = name_var.get().strip()
+            nombre = entry.get().strip()
             if not nombre:
-                messagebox.showwarning("Error", "El nombre no puede estar vacío.")
+                messagebox.showwarning("Error", "El nombre no puede estar vacío.", parent=dialog)
                 return
 
             # Generar ID desde el nombre
@@ -5559,8 +5599,8 @@ class MiniRemoteApp:
                 geofence, capas, obstaculos = self._build_scenario_data()
                 self._scenario_manager.create_scenario(scenario_id, nombre, geofence, capas, obstaculos)
 
-                # Si hay waypoints y estamos en el editor, guardarlos
-                if source == "editor" and self._mission_waypoints:
+                # Guardar waypoints si se solicita
+                if include_waypoints and self._mission_waypoints:
                     self._scenario_manager.add_flight_plan(
                         scenario_id, "plan_editor", "Plan desde Editor",
                         self._mission_waypoints, return_home=False
@@ -5587,14 +5627,26 @@ class MiniRemoteApp:
                 dialog.destroy()
                 messagebox.showinfo("Escenario", f"Escenario '{nombre}' guardado.")
             except Exception as e:
-                messagebox.showerror("Error", f"Error al guardar: {e}")
+                messagebox.showerror("Error", f"Error al guardar: {e}", parent=dialog)
 
-        # Botón guardar
-        tk.Button(dialog, text="💾 Guardar", command=do_save,
-                  bg="#28a745", fg="white", font=("Arial", 10)).pack(pady=15)
+        # Botones
+        btn_frame = tk.Frame(dialog)
+        btn_frame.pack(pady=10)
+        tk.Button(btn_frame, text="💾 Guardar", command=do_save,
+                  bg="#28a745", fg="white", font=("Arial", 10), width=12).pack(side="left", padx=5)
+        tk.Button(btn_frame, text="Cancelar", command=dialog.destroy,
+                  bg="#6c757d", fg="white", font=("Arial", 10), width=12).pack(side="left", padx=5)
 
-        # Enter para guardar
+        # Enter para guardar, Escape para cancelar
         dialog.bind('<Return>', lambda e: do_save())
+        dialog.bind('<Escape>', lambda e: dialog.destroy())
+
+        # Forzar visibilidad y foco
+        dialog.lift()
+        dialog.grab_set()
+        dialog.focus_force()
+        entry.focus_set()
+        dialog.wait_window()
 
     def _mission_apply_geofence(self):
         """Aplica el geofence configurado."""
