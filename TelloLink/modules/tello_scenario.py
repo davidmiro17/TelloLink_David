@@ -3,8 +3,21 @@
 
 import os
 import json
+import re
 from datetime import datetime
 from typing import Optional, Dict, List, Any
+
+
+def sanitize_filename(name: str) -> str:
+    """Convierte un nombre a un nombre de archivo válido."""
+    # Reemplazar caracteres no válidos
+    safe = re.sub(r'[<>:"/\\|?*]', '_', name)
+    # Reemplazar espacios múltiples por uno
+    safe = re.sub(r'\s+', ' ', safe).strip()
+    # Limitar longitud
+    if len(safe) > 100:
+        safe = safe[:100]
+    return safe or "sin_nombre"
 
 
 class ScenarioManager:
@@ -60,12 +73,16 @@ class ScenarioManager:
         return self._save_scenario(scenario)
 
     def _save_scenario(self, scenario: Dict) -> bool:
-        """Guarda el escenario a disco."""
+        """Guarda el escenario a disco usando el nombre como nombre de archivo."""
         scenario_id = scenario.get("id")
+        nombre = scenario.get("nombre", scenario_id)
         if not scenario_id:
             return False
 
-        path = os.path.join(self.base_dir, f"{scenario_id}.json")
+        # Usar el nombre del escenario como nombre de archivo (sanitizado)
+        filename = sanitize_filename(nombre)
+        path = os.path.join(self.base_dir, f"{filename}.json")
+
         try:
             with open(path, "w", encoding="utf-8") as f:
                 json.dump(scenario, f, indent=2, ensure_ascii=False)
@@ -75,24 +92,59 @@ class ScenarioManager:
             return False
 
     def load_scenario(self, scenario_id: str) -> Optional[Dict]:
-        """Carga un escenario por su ID."""
+        """Carga un escenario por su ID o nombre de archivo."""
+        # Primero intentar cargar por ID (formato antiguo)
         path = os.path.join(self.base_dir, f"{scenario_id}.json")
         if not os.path.exists(path):
-            return None
+            # Buscar por nombre sanitizado
+            path = os.path.join(self.base_dir, f"{sanitize_filename(scenario_id)}.json")
+        if not os.path.exists(path):
+            # Buscar en todos los archivos por ID interno
+            for filename in os.listdir(self.base_dir):
+                if filename.endswith(".json"):
+                    filepath = os.path.join(self.base_dir, filename)
+                    try:
+                        with open(filepath, "r", encoding="utf-8") as f:
+                            data = json.load(f)
+                        if data.get("id") == scenario_id:
+                            path = filepath
+                            break
+                    except Exception:
+                        continue
+            else:
+                return None
 
         try:
             with open(path, "r", encoding="utf-8") as f:
                 scenario = json.load(f)
             self._current_scenario = scenario
-            self._current_scenario_id = scenario_id
+            self._current_scenario_id = scenario.get("id", scenario_id)
             return scenario
         except Exception as e:
             print(f"[scenario] Error cargando: {e}")
             return None
 
     def delete_scenario(self, scenario_id: str) -> bool:
-        """Elimina un escenario."""
+        """Elimina un escenario por ID o nombre."""
+        # Primero intentar por ID
         path = os.path.join(self.base_dir, f"{scenario_id}.json")
+        if not os.path.exists(path):
+            # Buscar por nombre sanitizado
+            path = os.path.join(self.base_dir, f"{sanitize_filename(scenario_id)}.json")
+        if not os.path.exists(path):
+            # Buscar en todos los archivos por ID interno
+            for filename in os.listdir(self.base_dir):
+                if filename.endswith(".json"):
+                    filepath = os.path.join(self.base_dir, filename)
+                    try:
+                        with open(filepath, "r", encoding="utf-8") as f:
+                            data = json.load(f)
+                        if data.get("id") == scenario_id:
+                            path = filepath
+                            break
+                    except Exception:
+                        continue
+
         if os.path.exists(path):
             try:
                 os.remove(path)
