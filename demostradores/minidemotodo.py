@@ -702,10 +702,19 @@ class MiniRemoteApp:
             # Guardar el rectángulo de inclusión para dibujarlo (coordenadas absolutas)
             self._incl_rect = (x1, y1, x2, y2)
 
+            # Sincronizar también con _mission_geofence para el Editor de Misiones
+            self._mission_geofence = {
+                'x1': x1, 'y1': y1, 'x2': x2, 'y2': y2,
+                'zmin': zmin, 'zmax': zmax
+            }
+
             self._reapply_exclusions_to_backend()
             self._hud_show(f"Geofence {mode} activado", 1.5)
             if self._map_win and tk.Toplevel.winfo_exists(self._map_win):
                 self._redraw_map_static()
+            # Redibujar también el editor de misiones si está abierto
+            if hasattr(self, '_mission_canvas') and self._mission_canvas and self._mission_canvas.winfo_exists():
+                self._draw_mission_map()
         except Exception as e:
             messagebox.showerror("Geofence", f"Error: {e}")
 
@@ -2695,6 +2704,14 @@ class MiniRemoteApp:
             gf_y2 = max(y1, y2)
             self._incl_rect = (gf_x1, gf_y1, gf_x2, gf_y2)
 
+            # Sincronizar también con _mission_geofence para el Editor de Misiones
+            self._mission_geofence = {
+                'x1': gf_x1, 'y1': gf_y1,
+                'x2': gf_x2, 'y2': gf_y2,
+                'zmin': int(self.gf_zmin_var.get() or 0),
+                'zmax': int(self.gf_zmax_var.get() or 200)
+            }
+
             width_x = abs(x2 - x1)
             width_y = abs(y2 - y1)
 
@@ -2705,6 +2722,10 @@ class MiniRemoteApp:
 
             self._hud_show(f"Zona definida: {width_x:.0f}x{width_y:.0f} cm", 2.0)
             self._redraw_map_static()
+
+            # Redibujar también el editor de misiones si está abierto
+            if hasattr(self, '_mission_canvas') and self._mission_canvas and self._mission_canvas.winfo_exists():
+                self._draw_mission_map()
 
     def _start_inclusion_rect(self):
 
@@ -4469,13 +4490,23 @@ class MiniRemoteApp:
                                           fill="#333", outline="white", width=2)
         self._mission_canvas.create_text(center + 15, center + 15, text="(0,0)", font=("Arial", 8), fill="#666")
 
-        # Dibujar geofence
+        # Dibujar geofence (igual que en Abrir Mapa: activo=sólido, desactivado=discontinuo)
         if self._mission_geofence:
             gf = self._mission_geofence
             x1, y1 = self._mission_world_to_canvas(gf['x1'], gf['y1'])
             x2, y2 = self._mission_world_to_canvas(gf['x2'], gf['y2'])
-            self._mission_canvas.create_rectangle(x1, y1, x2, y2,
-                                                  outline="#28a745", fill="", width=3)
+
+            # Comprobar si geofence está activo
+            gf_enabled = getattr(self.dron, "_gf_enabled", False)
+
+            if gf_enabled:
+                # Activo: verde fuerte, línea gruesa
+                self._mission_canvas.create_rectangle(x1, y1, x2, y2,
+                                                      outline="#00aa00", fill="", width=3)
+            else:
+                # Desactivado (standby): verde tenue, línea fina punteada
+                self._mission_canvas.create_rectangle(x1, y1, x2, y2,
+                                                      outline="#88cc88", fill="", width=1, dash=(4, 4))
 
         # Obtener capas seleccionadas (checkboxes) para colorear obstáculos
         c1 = getattr(self, '_mission_layer_c1', None)
@@ -4867,12 +4898,20 @@ class MiniRemoteApp:
                 self.gf_y2_var.set(str(int(max(y1, y2))))
 
                 # Guardar geofence local para misión
+                gf_x1 = min(x1, x2)
+                gf_y1 = min(y1, y2)
+                gf_x2 = max(x1, x2)
+                gf_y2 = max(y1, y2)
+
                 self._mission_geofence = {
-                    'x1': min(x1, x2), 'y1': min(y1, y2),
-                    'x2': max(x1, x2), 'y2': max(y1, y2),
+                    'x1': gf_x1, 'y1': gf_y1,
+                    'x2': gf_x2, 'y2': gf_y2,
                     'zmin': int(self.gf_zmin_var.get() or 0),
                     'zmax': int(self.gf_zmax_var.get() or 200)
                 }
+
+                # Sincronizar también con _incl_rect para la ventana de Mapa
+                self._incl_rect = (gf_x1, gf_y1, gf_x2, gf_y2)
 
                 width_x = abs(x2 - x1)
                 width_y = abs(y2 - y1)
@@ -4884,6 +4923,10 @@ class MiniRemoteApp:
 
                 self._hud_show(f"Zona definida: {width_x:.0f}x{width_y:.0f} cm", 2.0)
                 self._draw_mission_map()
+
+                # Redibujar también el mapa si está abierto
+                if self._map_win and tk.Toplevel.winfo_exists(self._map_win):
+                    self._redraw_map_static()
 
     def _mission_start_geofence_rect(self):
         """Inicia el dibujo de la zona de geofence en el mapa de misiones."""
@@ -5149,6 +5192,12 @@ class MiniRemoteApp:
                 'zmin': gf.get('zmin', 0), 'zmax': gf.get('zmax', 200)
             }
 
+            # Sincronizar también con _incl_rect para la ventana de Mapa
+            self._incl_rect = (
+                gf.get('x1', -100), gf.get('y1', -100),
+                gf.get('x2', 100), gf.get('y2', 100)
+            )
+
         # Cargar capas
         capas = scenario.get('capas', {})
         if capas:
@@ -5394,6 +5443,13 @@ class MiniRemoteApp:
                 gf.get('x1', -100), gf.get('y1', -100),
                 gf.get('x2', 100), gf.get('y2', 100)
             )
+
+            # Sincronizar también con _mission_geofence para el Editor de Misiones
+            self._mission_geofence = {
+                'x1': gf.get('x1', -100), 'y1': gf.get('y1', -100),
+                'x2': gf.get('x2', 100), 'y2': gf.get('y2', 100),
+                'zmin': gf.get('zmin', 0), 'zmax': gf.get('zmax', 200)
+            }
 
         # Cargar capas
         capas = scenario.get('capas', {})
