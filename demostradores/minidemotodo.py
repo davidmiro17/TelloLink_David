@@ -1682,19 +1682,13 @@ class MiniRemoteApp:
         tk.Button(scenario_row_map, text="↻", command=self._refresh_map_scenario_list,
                   bg="#6c757d", fg="white", font=("Arial", 8), bd=0, width=2).pack(side="left", padx=2)
 
-        # Botones - fila 1: cargar selección e importar
+        # Botones de escenario: Cargar y Guardar
         scenario_btns_map = tk.Frame(scenario_content_map, bg=BG_CARD)
         scenario_btns_map.pack(fill="x", pady=2)
-        tk.Button(scenario_btns_map, text="▶ Cargar", command=self._load_scenario_to_map,
+        tk.Button(scenario_btns_map, text="📂 Cargar", command=self._load_scenario_from_file_to_map,
                   bg="#17a2b8", fg="white", font=("Arial", 8), bd=0).pack(side="left", fill="x", expand=True, padx=2)
-        tk.Button(scenario_btns_map, text="📁 Importar", command=self._load_scenario_from_file_to_map,
-                  bg="#6c757d", fg="white", font=("Arial", 8), bd=0).pack(side="left", fill="x", expand=True, padx=2)
-
-        # Botones - fila 2: guardar
-        scenario_btns_map2 = tk.Frame(scenario_content_map, bg=BG_CARD)
-        scenario_btns_map2.pack(fill="x", pady=2)
-        tk.Button(scenario_btns_map2, text="💾 Guardar", command=self._save_scenario_from_map,
-                  bg="#28a745", fg="white", font=("Arial", 8), bd=0).pack(fill="x", padx=2)
+        tk.Button(scenario_btns_map, text="💾 Guardar", command=self._save_scenario_from_map,
+                  bg="#28a745", fg="white", font=("Arial", 8), bd=0).pack(side="left", fill="x", expand=True, padx=2)
 
         # Nombre del escenario
         self._map_scenario_name_var = tk.StringVar(value="(ninguno)")
@@ -3898,19 +3892,13 @@ class MiniRemoteApp:
         tk.Button(scenario_row1, text="↻", command=self._refresh_scenario_list,
                   bg="#6c757d", fg="white", font=("Arial", 8), bd=0, width=2).pack(side="left", padx=2)
 
-        # Botones de escenario - fila 1: cargar selección e importar
+        # Botones de escenario: Cargar y Guardar
         scenario_btns = tk.Frame(scenario_content, bg=BG_CARD)
         scenario_btns.pack(fill="x", pady=2)
-        tk.Button(scenario_btns, text="▶ Cargar", command=self._load_scenario_to_editor,
+        tk.Button(scenario_btns, text="📂 Cargar", command=self._load_scenario_from_file,
                   bg="#17a2b8", fg="white", font=("Arial", 8), bd=0).pack(side="left", fill="x", expand=True, padx=2)
-        tk.Button(scenario_btns, text="📁 Importar", command=self._load_scenario_from_file,
-                  bg="#6c757d", fg="white", font=("Arial", 8), bd=0).pack(side="left", fill="x", expand=True, padx=2)
-
-        # Botones de escenario - fila 2: guardar
-        scenario_btns2 = tk.Frame(scenario_content, bg=BG_CARD)
-        scenario_btns2.pack(fill="x", pady=2)
-        tk.Button(scenario_btns2, text="💾 Guardar", command=self._save_scenario_from_editor,
-                  bg="#28a745", fg="white", font=("Arial", 8), bd=0).pack(fill="x", padx=2)
+        tk.Button(scenario_btns, text="💾 Guardar", command=self._save_scenario_from_editor,
+                  bg="#28a745", fg="white", font=("Arial", 8), bd=0).pack(side="left", fill="x", expand=True, padx=2)
 
         # Nombre del escenario actual
         self._scenario_name_var = tk.StringVar(value="(ninguno)")
@@ -5177,7 +5165,16 @@ class MiniRemoteApp:
         """Maneja selección de escenario en el combo."""
         pass  # Solo informativo, cargar con botón
 
-    def _apply_scenario_to_editor(self, scenario, scenario_id=None):
+    def _apply_scenario(self, scenario, scenario_id=None, source="editor"):
+        """
+        Función unificada para aplicar un escenario.
+        Sincroniza datos entre Editor de Misiones y Abrir Mapa.
+
+        Args:
+            scenario: Dict con los datos del escenario
+            scenario_id: ID opcional del escenario
+            source: "editor" o "map" - desde dónde se llamó
+        """
         if not scenario:
             messagebox.showwarning("Escenario", "No se pudo cargar el escenario.")
             return
@@ -5187,30 +5184,49 @@ class MiniRemoteApp:
 
         scenario_name = scenario.get("nombre") or scenario.get("id") or "Sin nombre"
         self._current_scenario_id = scenario.get('id')
-        self._scenario_name_var.set(f"Cargado: {scenario_name}")
 
-        # Cargar geofence
+        # Actualizar etiquetas de nombre en ambas ventanas
+        if hasattr(self, '_scenario_name_var') and self._scenario_name_var:
+            self._scenario_name_var.set(f"Cargado: {scenario_name}")
+        if hasattr(self, '_map_scenario_name_var') and self._map_scenario_name_var:
+            self._map_scenario_name_var.set(f"Cargado: {scenario_name}")
+
+        # ─────────────────────────────────────────────────────────────────────
+        # CARGAR GEOFENCE (sincronizado en ambos formatos)
+        # ─────────────────────────────────────────────────────────────────────
         gf = scenario.get('geofence', {})
         if gf:
-            self.gf_x1_var.set(str(int(gf.get('x1', -100))))
-            self.gf_y1_var.set(str(int(gf.get('y1', -100))))
-            self.gf_x2_var.set(str(int(gf.get('x2', 100))))
-            self.gf_y2_var.set(str(int(gf.get('y2', 100))))
-            self.gf_zmin_var.set(str(int(gf.get('zmin', 0))))
-            self.gf_zmax_var.set(str(int(gf.get('zmax', 200))))
+            x1 = gf.get('x1', -100)
+            y1 = gf.get('y1', -100)
+            x2 = gf.get('x2', 100)
+            y2 = gf.get('y2', 100)
+            zmin = gf.get('zmin', 0)
+            zmax = gf.get('zmax', 200)
+
+            # Variables globales de geofence
+            self.gf_x1_var.set(str(int(x1)))
+            self.gf_y1_var.set(str(int(y1)))
+            self.gf_x2_var.set(str(int(x2)))
+            self.gf_y2_var.set(str(int(y2)))
+            self.gf_zmin_var.set(str(int(zmin)))
+            self.gf_zmax_var.set(str(int(zmax)))
+
+            # Formato para Editor de Misiones
             self._mission_geofence = {
-                'x1': gf.get('x1', -100), 'y1': gf.get('y1', -100),
-                'x2': gf.get('x2', 100), 'y2': gf.get('y2', 100),
-                'zmin': gf.get('zmin', 0), 'zmax': gf.get('zmax', 200)
+                'x1': x1, 'y1': y1, 'x2': x2, 'y2': y2,
+                'zmin': zmin, 'zmax': zmax
             }
 
-            # Sincronizar también con _incl_rect para la ventana de Mapa
-            self._incl_rect = (
-                gf.get('x1', -100), gf.get('y1', -100),
-                gf.get('x2', 100), gf.get('y2', 100)
-            )
+            # Formato para Abrir Mapa
+            self._incl_rect = (x1, y1, x2, y2)
+            if hasattr(self, '_incl_zmin_var') and self._incl_zmin_var:
+                self._incl_zmin_var.set(int(zmin))
+            if hasattr(self, '_incl_zmax_var') and self._incl_zmax_var:
+                self._incl_zmax_var.set(int(zmax))
 
-        # Cargar capas
+        # ─────────────────────────────────────────────────────────────────────
+        # CARGAR CAPAS
+        # ─────────────────────────────────────────────────────────────────────
         capas = scenario.get('capas', {})
         if capas:
             if hasattr(self, '_layer1_max_var') and self._layer1_max_var:
@@ -5220,37 +5236,91 @@ class MiniRemoteApp:
             if hasattr(self, '_layer3_max_var') and self._layer3_max_var:
                 self._layer3_max_var.set(int(capas.get('c3_max', 200)))
 
-        # Cargar obstáculos
+        # ─────────────────────────────────────────────────────────────────────
+        # CARGAR OBSTÁCULOS (sincronizado en AMBOS formatos)
+        # ─────────────────────────────────────────────────────────────────────
         obs = scenario.get('obstaculos', {})
-        self._mission_exclusions = []
 
-        # Círculos
+        # Limpiar ambos formatos
+        self._mission_exclusions = []
+        self._excl_circles = []
+        self._excl_polys = []
+
+        # Cargar círculos
         for c in obs.get('circles', []):
+            cx = c.get('cx', 0)
+            cy = c.get('cy', 0)
+            r = c.get('r', 30)
+            obs_zmin = c.get('zmin', 0)
+            obs_zmax = c.get('zmax', 60)
+            nombre = c.get('nombre', '')
+
+            # Formato Editor de Misiones
             self._mission_exclusions.append({
                 'type': 'circle',
-                'cx': c.get('cx', 0),
-                'cy': c.get('cy', 0),
-                'r': c.get('r', 30),
-                'zmin': c.get('zmin', 0),
-                'zmax': c.get('zmax', 60),
-                'nombre': c.get('nombre', '')
+                'cx': cx, 'cy': cy, 'r': r,
+                'zmin': obs_zmin, 'zmax': obs_zmax,
+                'nombre': nombre
             })
 
-        # Polígonos
+            # Formato Abrir Mapa
+            self._excl_circles.append({
+                'cx': cx, 'cy': cy, 'r': r,
+                'zmin': obs_zmin, 'zmax': obs_zmax
+            })
+
+        # Cargar polígonos/rectángulos
         for p in obs.get('polygons', []):
+            points = p.get('poly', [])
+            obs_zmin = p.get('zmin', 0)
+            obs_zmax = p.get('zmax', 60)
+            nombre = p.get('nombre', '')
+
+            # Formato Editor de Misiones
             self._mission_exclusions.append({
-                'type': 'polygon',
-                'points': p.get('poly', []),
-                'zmin': p.get('zmin', 0),
-                'zmax': p.get('zmax', 60),
-                'nombre': p.get('nombre', '')
+                'type': 'poly',
+                'points': points,
+                'zmin': obs_zmin, 'zmax': obs_zmax,
+                'nombre': nombre
             })
 
-        # Redibujar mapa
-        if hasattr(self, '_draw_mission_map'):
-            self._draw_mission_map()
+            # Formato Abrir Mapa
+            self._excl_polys.append({
+                'points': points,
+                'zmin': obs_zmin, 'zmax': obs_zmax
+            })
+
+        # ─────────────────────────────────────────────────────────────────────
+        # REDIBUJAR MAPAS
+        # ─────────────────────────────────────────────────────────────────────
+        # Redibujar Editor de Misiones si está abierto
+        if hasattr(self, '_mission_canvas') and self._mission_canvas:
+            try:
+                if self._mission_canvas.winfo_exists():
+                    self._draw_mission_map()
+            except Exception:
+                pass
+
+        # Redibujar Abrir Mapa si está abierto
+        if self._map_win:
+            try:
+                if tk.Toplevel.winfo_exists(self._map_win):
+                    self._redraw_map_static()
+            except Exception:
+                pass
+
+        # Vincular escenario a la sesión activa si corresponde
+        if source == "map" and self._session_manager.is_session_active():
+            self._session_manager._session_data["escenario_id"] = self._current_scenario_id
+            self._session_manager._session_data["tipo"] = "manual"
+            self._session_manager._save_session_metadata()
+            print(f"[Session] Escenario vinculado: {self._current_scenario_id}")
 
         messagebox.showinfo("Escenario", f"Escenario '{scenario_name}' cargado.")
+
+    def _apply_scenario_to_editor(self, scenario, scenario_id=None):
+        """Aplica un escenario al editor y sincroniza con el mapa."""
+        self._apply_scenario(scenario, scenario_id=scenario_id, source="editor")
 
     def _load_scenario_from_file(self):
         """Carga un escenario desde un archivo JSON."""
@@ -5290,113 +5360,6 @@ class MiniRemoteApp:
                     break
 
         self._apply_scenario_to_editor(scenario)
-
-    def _save_scenario_from_editor(self):
-        """Guarda el estado actual del editor como escenario."""
-        # Verificar que la ventana del editor exista
-        if not hasattr(self, '_mission_win') or not self._mission_win:
-            messagebox.showwarning("Error", "El editor de misiones no está abierto.")
-            return
-        try:
-            if not tk.Toplevel.winfo_exists(self._mission_win):
-                messagebox.showwarning("Error", "El editor de misiones no está abierto.")
-                return
-        except Exception:
-            messagebox.showwarning("Error", "El editor de misiones no está abierto.")
-            return
-
-        try:
-            dialog = tk.Toplevel(self._mission_win)
-            dialog.title("Guardar Escenario")
-            dialog.geometry("300x150")
-            dialog.transient(self._mission_win)
-            dialog.grab_set()
-
-            tk.Label(dialog, text="ID (sin espacios):").pack(pady=(10, 2))
-            id_var = tk.StringVar(value=self._current_scenario_id or "nuevo_escenario")
-            tk.Entry(dialog, textvariable=id_var, width=30).pack()
-
-            tk.Label(dialog, text="Nombre:").pack(pady=(10, 2))
-            name_var = tk.StringVar(value="Nuevo Escenario")
-            tk.Entry(dialog, textvariable=name_var, width=30).pack()
-
-            def do_save():
-                scenario_id = id_var.get().strip().replace(" ", "_")
-                nombre = name_var.get().strip() or scenario_id
-
-                if not scenario_id:
-                    messagebox.showwarning("Error", "ID no puede estar vacío.")
-                    return
-
-                try:
-                    # Construir geofence
-                    if self._mission_geofence:
-                        geofence = dict(self._mission_geofence)
-                    else:
-                        geofence = {
-                            'x1': self._mgf_x1.get() if hasattr(self, '_mgf_x1') else -100,
-                            'y1': self._mgf_y1.get() if hasattr(self, '_mgf_y1') else -100,
-                            'x2': self._mgf_x2.get() if hasattr(self, '_mgf_x2') else 100,
-                            'y2': self._mgf_y2.get() if hasattr(self, '_mgf_y2') else 100,
-                            'zmin': self._mgf_zmin.get() if hasattr(self, '_mgf_zmin') else 0,
-                            'zmax': self._mgf_zmax.get() if hasattr(self, '_mgf_zmax') else 200
-                        }
-
-                    # Construir capas
-                    capas = {
-                        'c1_max': self._layer1_max_var.get() if self._layer1_max_var else 60,
-                        'c2_max': self._layer2_max_var.get() if self._layer2_max_var else 120,
-                        'c3_max': self._layer3_max_var.get() if self._layer3_max_var else 200
-                    }
-
-                    # Construir obstáculos
-                    circles = []
-                    polygons = []
-                    for exc in self._mission_exclusions:
-                        if exc.get('type') == 'circle':
-                            circles.append({
-                                'cx': exc.get('cx', 0),
-                                'cy': exc.get('cy', 0),
-                                'r': exc.get('r', 30),
-                                'zmin': exc.get('zmin', 0),
-                                'zmax': exc.get('zmax', 60),
-                                'nombre': exc.get('nombre', '')
-                            })
-                        elif exc.get('type') in ('polygon', 'rect'):
-                            polygons.append({
-                                'poly': exc.get('points', []),
-                                'zmin': exc.get('zmin', 0),
-                                'zmax': exc.get('zmax', 60),
-                                'nombre': exc.get('nombre', '')
-                            })
-
-                    obstaculos = {'circles': circles, 'polygons': polygons}
-
-                    # Crear o actualizar escenario
-                    self._scenario_manager.create_scenario(scenario_id, nombre, geofence, capas, obstaculos)
-
-                    # Si hay waypoints, guardarlos como plan de vuelo
-                    if self._mission_waypoints:
-                        self._scenario_manager.add_flight_plan(
-                            scenario_id,
-                            "plan_editor",
-                            "Plan desde Editor",
-                            self._mission_waypoints,
-                            return_home=False
-                        )
-
-                    self._current_scenario_id = scenario_id
-                    self._scenario_name_var.set(f"Guardado: {nombre}")
-                    self._refresh_scenario_list()
-
-                    dialog.destroy()
-                    messagebox.showinfo("Escenario", f"Escenario '{nombre}' guardado.")
-                except Exception as e:
-                    messagebox.showerror("Error", f"Error al guardar: {e}")
-
-            tk.Button(dialog, text="Guardar", command=do_save, bg="#28a745", fg="white").pack(pady=15)
-        except Exception as e:
-            messagebox.showerror("Error", f"Error al abrir diálogo: {e}")
 
     # =========================================================================
     # MÉTODOS DE ESCENARIO PARA MAPA (modo RC)
@@ -5440,85 +5403,8 @@ class MiniRemoteApp:
         self._apply_scenario_to_map(scenario)
 
     def _apply_scenario_to_map(self, scenario, scenario_id=None):
-        if not scenario:
-            messagebox.showwarning("Escenario", "No se pudo cargar el escenario.")
-            return
-
-        if scenario_id:
-            scenario["id"] = scenario_id
-
-        scenario_name = scenario.get("nombre") or scenario.get("id") or "Sin nombre"
-        self._current_scenario_id = scenario.get('id')
-        self._map_scenario_name_var.set(f"Cargado: {scenario_name}")
-
-        # Cargar geofence a las variables principales
-        gf = scenario.get('geofence', {})
-        if gf:
-            self.gf_x1_var.set(str(int(gf.get('x1', -100))))
-            self.gf_y1_var.set(str(int(gf.get('y1', -100))))
-            self.gf_x2_var.set(str(int(gf.get('x2', 100))))
-            self.gf_y2_var.set(str(int(gf.get('y2', 100))))
-            self.gf_zmin_var.set(str(int(gf.get('zmin', 0))))
-            self.gf_zmax_var.set(str(int(gf.get('zmax', 200))))
-
-            # También en inclusión local
-            if hasattr(self, '_incl_zmin_var') and self._incl_zmin_var:
-                self._incl_zmin_var.set(int(gf.get('zmin', 0)))
-            if hasattr(self, '_incl_zmax_var') and self._incl_zmax_var:
-                self._incl_zmax_var.set(int(gf.get('zmax', 200)))
-
-            # Guardar rectángulo de inclusión (solo XY)
-            self._incl_rect = (
-                gf.get('x1', -100), gf.get('y1', -100),
-                gf.get('x2', 100), gf.get('y2', 100)
-            )
-
-            # Sincronizar también con _mission_geofence para el Editor de Misiones
-            self._mission_geofence = {
-                'x1': gf.get('x1', -100), 'y1': gf.get('y1', -100),
-                'x2': gf.get('x2', 100), 'y2': gf.get('y2', 100),
-                'zmin': gf.get('zmin', 0), 'zmax': gf.get('zmax', 200)
-            }
-
-        # Cargar capas
-        capas = scenario.get('capas', {})
-        if capas:
-            if hasattr(self, '_layer1_max_var') and self._layer1_max_var:
-                self._layer1_max_var.set(int(capas.get('c1_max', 60)))
-            if hasattr(self, '_layer2_max_var') and self._layer2_max_var:
-                self._layer2_max_var.set(int(capas.get('c2_max', 120)))
-            if hasattr(self, '_layer3_max_var') and self._layer3_max_var:
-                self._layer3_max_var.set(int(capas.get('c3_max', 200)))
-
-        # Cargar obstáculos
-        obs = scenario.get('obstaculos', {})
-        self._excl_circles = []
-        self._excl_polys = []
-
-        for c in obs.get('circles', []):
-            self._excl_circles.append({
-                'cx': c.get('cx', 0), 'cy': c.get('cy', 0), 'r': c.get('r', 30),
-                'zmin': c.get('zmin', 0), 'zmax': c.get('zmax', 60)
-            })
-
-        for p in obs.get('polygons', []):
-            self._excl_polys.append({
-                'points': p.get('poly', []),
-                'zmin': p.get('zmin', 0), 'zmax': p.get('zmax', 60)
-            })
-
-        # Redibujar mapa
-        if hasattr(self, '_draw_map'):
-            self._draw_map()
-
-        # Vincular escenario a la sesión activa (modo manual/RC)
-        if self._session_manager.is_session_active():
-            self._session_manager._session_data["escenario_id"] = self._current_scenario_id
-            self._session_manager._session_data["tipo"] = "manual"
-            self._session_manager._save_session_metadata()
-            print(f"[Session] Escenario vinculado (RC): {self._current_scenario_id}")
-
-        messagebox.showinfo("Escenario", f"Escenario '{scenario_name}' cargado.")
+        """Aplica un escenario al mapa y sincroniza con el editor."""
+        self._apply_scenario(scenario, scenario_id=scenario_id, source="map")
 
     def _load_scenario_from_file_to_map(self):
         """Carga un escenario desde archivo en la vista de mapa."""
@@ -5538,86 +5424,177 @@ class MiniRemoteApp:
         except Exception as e:
             messagebox.showerror("Escenario", f"Error cargando escenario: {e}")
 
+    def _build_scenario_data(self):
+        """
+        Construye los datos del escenario actual desde cualquiera de los formatos.
+        Unifica datos de Editor de Misiones y Abrir Mapa.
+        """
+        # ─────────────────────────────────────────────────────────────────────
+        # GEOFENCE
+        # ─────────────────────────────────────────────────────────────────────
+        if self._mission_geofence:
+            geofence = dict(self._mission_geofence)
+        elif self._incl_rect:
+            x1, y1, x2, y2 = self._incl_rect
+            geofence = {
+                'x1': int(x1), 'y1': int(y1),
+                'x2': int(x2), 'y2': int(y2),
+                'zmin': int(self.gf_zmin_var.get() or 0),
+                'zmax': int(self.gf_zmax_var.get() or 200)
+            }
+        else:
+            geofence = {
+                'x1': int(self.gf_x1_var.get() or -100),
+                'y1': int(self.gf_y1_var.get() or -100),
+                'x2': int(self.gf_x2_var.get() or 100),
+                'y2': int(self.gf_y2_var.get() or 100),
+                'zmin': int(self.gf_zmin_var.get() or 0),
+                'zmax': int(self.gf_zmax_var.get() or 200)
+            }
+
+        # ─────────────────────────────────────────────────────────────────────
+        # CAPAS
+        # ─────────────────────────────────────────────────────────────────────
+        capas = {
+            'c1_max': self._layer1_max_var.get() if self._layer1_max_var else 60,
+            'c2_max': self._layer2_max_var.get() if self._layer2_max_var else 120,
+            'c3_max': self._layer3_max_var.get() if self._layer3_max_var else 200
+        }
+
+        # ─────────────────────────────────────────────────────────────────────
+        # OBSTÁCULOS (usar el formato que tenga datos)
+        # ─────────────────────────────────────────────────────────────────────
+        circles = []
+        polygons = []
+
+        # Priorizar _mission_exclusions si tiene datos
+        if self._mission_exclusions:
+            for exc in self._mission_exclusions:
+                if exc.get('type') == 'circle':
+                    circles.append({
+                        'cx': exc.get('cx', 0),
+                        'cy': exc.get('cy', 0),
+                        'r': exc.get('r', 30),
+                        'zmin': exc.get('zmin', 0),
+                        'zmax': exc.get('zmax', 60),
+                        'nombre': exc.get('nombre', '')
+                    })
+                elif exc.get('type') in ('polygon', 'poly', 'rect'):
+                    points = exc.get('points', [])
+                    # Si es rectángulo, convertir a puntos
+                    if exc.get('type') == 'rect' and not points:
+                        x1, y1 = exc.get('x1', 0), exc.get('y1', 0)
+                        x2, y2 = exc.get('x2', 0), exc.get('y2', 0)
+                        points = [[x1, y1], [x2, y1], [x2, y2], [x1, y2]]
+                    polygons.append({
+                        'poly': points,
+                        'zmin': exc.get('zmin', 0),
+                        'zmax': exc.get('zmax', 60),
+                        'nombre': exc.get('nombre', '')
+                    })
+        else:
+            # Usar formato de Abrir Mapa
+            if hasattr(self, '_excl_circles') and self._excl_circles:
+                for c in self._excl_circles:
+                    circles.append({
+                        'cx': c['cx'], 'cy': c['cy'], 'r': c['r'],
+                        'zmin': c.get('zmin', 0), 'zmax': c.get('zmax', 60)
+                    })
+            if hasattr(self, '_excl_polys') and self._excl_polys:
+                for p in self._excl_polys:
+                    polygons.append({
+                        'poly': p['points'],
+                        'zmin': p.get('zmin', 0), 'zmax': p.get('zmax', 60)
+                    })
+
+        obstaculos = {'circles': circles, 'polygons': polygons}
+
+        return geofence, capas, obstaculos
+
     def _save_scenario_from_map(self):
         """Guarda el estado actual del mapa como escenario."""
-        # Verificar que la ventana del mapa exista
-        if not self._map_win or not tk.Toplevel.winfo_exists(self._map_win):
-            messagebox.showwarning("Error", "La ventana del mapa no está abierta.")
-            return
+        self._show_save_dialog(self._map_win, "map")
 
+    def _save_scenario_from_editor(self):
+        """Guarda el estado actual del editor como escenario."""
+        self._show_save_dialog(self._mission_win, "editor")
+
+    def _show_save_dialog(self, parent_win, source):
+        """Muestra el diálogo de guardado."""
+        # Usar ventana principal si la ventana padre no está disponible
         try:
-            dialog = tk.Toplevel(self._map_win)
-            dialog.title("Guardar Escenario")
-            dialog.geometry("300x150")
-            dialog.transient(self._map_win)
-            dialog.grab_set()
+            if parent_win and parent_win.winfo_exists():
+                parent = parent_win
+            else:
+                parent = self.root
+        except Exception:
+            parent = self.root
 
-            tk.Label(dialog, text="ID (sin espacios):").pack(pady=(10, 2))
-            id_var = tk.StringVar(value=self._current_scenario_id or "nuevo_escenario")
-            tk.Entry(dialog, textvariable=id_var, width=30).pack()
+        dialog = tk.Toplevel(parent)
+        dialog.title("Guardar Escenario")
+        dialog.geometry("300x120")
+        dialog.transient(parent)
+        dialog.grab_set()
+        dialog.focus_set()
 
-            tk.Label(dialog, text="Nombre:").pack(pady=(10, 2))
-            name_var = tk.StringVar(value="Nuevo Escenario")
-            tk.Entry(dialog, textvariable=name_var, width=30).pack()
+        # Solo pedir el nombre (el ID se genera automáticamente)
+        tk.Label(dialog, text="Nombre del escenario:").pack(pady=(15, 5))
+        name_var = tk.StringVar(value="Nuevo Escenario")
+        entry = tk.Entry(dialog, textvariable=name_var, width=30)
+        entry.pack(pady=5)
+        entry.select_range(0, tk.END)
+        entry.focus_set()
 
-            def do_save():
-                scenario_id = id_var.get().strip().replace(" ", "_")
-                nombre = name_var.get().strip() or scenario_id
+        def do_save():
+            nombre = name_var.get().strip()
+            if not nombre:
+                messagebox.showwarning("Error", "El nombre no puede estar vacío.")
+                return
 
-                if not scenario_id:
-                    messagebox.showwarning("Error", "ID no puede estar vacío.")
-                    return
+            # Generar ID desde el nombre
+            scenario_id = nombre.lower().replace(" ", "_")
+            scenario_id = ''.join(c for c in scenario_id if c.isalnum() or c == '_')
 
-                try:
-                    # Construir geofence desde _incl_rect o variables
-                    if self._incl_rect:
-                        x1, y1, x2, y2 = self._incl_rect
-                        geofence = {
-                            'x1': int(x1), 'y1': int(y1),
-                            'x2': int(x2), 'y2': int(y2),
-                            'zmin': int(self.gf_zmin_var.get() or 0),
-                            'zmax': int(self.gf_zmax_var.get() or 200)
-                        }
-                    else:
-                        geofence = {
-                            'x1': int(self.gf_x1_var.get() or -100),
-                            'y1': int(self.gf_y1_var.get() or -100),
-                            'x2': int(self.gf_x2_var.get() or 100),
-                            'y2': int(self.gf_y2_var.get() or 100),
-                            'zmin': int(self.gf_zmin_var.get() or 0),
-                            'zmax': int(self.gf_zmax_var.get() or 200)
-                        }
+            try:
+                geofence, capas, obstaculos = self._build_scenario_data()
+                self._scenario_manager.create_scenario(scenario_id, nombre, geofence, capas, obstaculos)
 
-                    # Capas
-                    capas = {
-                        'c1_max': self._layer1_max_var.get() if self._layer1_max_var else 60,
-                        'c2_max': self._layer2_max_var.get() if self._layer2_max_var else 120,
-                        'c3_max': self._layer3_max_var.get() if self._layer3_max_var else 200
-                    }
+                # Si hay waypoints y estamos en el editor, guardarlos
+                if source == "editor" and self._mission_waypoints:
+                    self._scenario_manager.add_flight_plan(
+                        scenario_id, "plan_editor", "Plan desde Editor",
+                        self._mission_waypoints, return_home=False
+                    )
 
-                    # Obstáculos
-                    circles = [{'cx': c['cx'], 'cy': c['cy'], 'r': c['r'],
-                                'zmin': c.get('zmin', 0), 'zmax': c.get('zmax', 60)}
-                               for c in self._excl_circles]
-                    polygons = [{'poly': p['points'], 'zmin': p.get('zmin', 0), 'zmax': p.get('zmax', 60)}
-                                for p in self._excl_polys]
+                self._current_scenario_id = scenario_id
 
-                    obstaculos = {'circles': circles, 'polygons': polygons}
-
-                    self._scenario_manager.create_scenario(scenario_id, nombre, geofence, capas, obstaculos)
-
-                    self._current_scenario_id = scenario_id
+                # Actualizar etiquetas
+                if hasattr(self, '_scenario_name_var') and self._scenario_name_var:
+                    self._scenario_name_var.set(f"Guardado: {nombre}")
+                if hasattr(self, '_map_scenario_name_var') and self._map_scenario_name_var:
                     self._map_scenario_name_var.set(f"Guardado: {nombre}")
+
+                # Refrescar listas
+                try:
+                    self._refresh_scenario_list()
+                except Exception:
+                    pass
+                try:
                     self._refresh_map_scenario_list()
+                except Exception:
+                    pass
 
-                    dialog.destroy()
-                    messagebox.showinfo("Escenario", f"Escenario '{nombre}' guardado.")
-                except Exception as e:
-                    messagebox.showerror("Error", f"Error al guardar: {e}")
+                dialog.destroy()
+                messagebox.showinfo("Escenario", f"Escenario '{nombre}' guardado.")
+            except Exception as e:
+                messagebox.showerror("Error", f"Error al guardar: {e}")
 
-            tk.Button(dialog, text="Guardar", command=do_save, bg="#28a745", fg="white").pack(pady=15)
-        except Exception as e:
-            messagebox.showerror("Error", f"Error al abrir diálogo: {e}")
+        # Botón guardar
+        tk.Button(dialog, text="💾 Guardar", command=do_save,
+                  bg="#28a745", fg="white", font=("Arial", 10)).pack(pady=15)
+
+        # Enter para guardar
+        dialog.bind('<Return>', lambda e: do_save())
 
     def _mission_apply_geofence(self):
         """Aplica el geofence configurado."""
