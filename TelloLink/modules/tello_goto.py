@@ -46,6 +46,8 @@ def _world_to_local(dx_world: float, dy_world: float, yaw_deg: float) -> tuple:
     x_local = dx_world * cos_y + dy_world * sin_y   # forward/back
     y_local = -dx_world * sin_y + dy_world * cos_y  # left/right
 
+    print(f"[_world_to_local] yaw={yaw_deg:.1f}° → world({dx_world:.1f}, {dy_world:.1f}) → local({x_local:.1f}, {y_local:.1f})")
+
     return x_local, y_local
 
 
@@ -118,6 +120,18 @@ def _goto_rel_worker(self,
         setattr(self, "_goto_in_progress", False)
 
 
+def _get_real_yaw(self) -> Optional[float]:
+    """Lee el yaw REAL del dron desde el IMU."""
+    try:
+        if hasattr(self, "get_yaw"):
+            real_yaw = self.get_yaw()
+            if real_yaw is not None:
+                return float(real_yaw)
+    except Exception as e:
+        print(f"[goto] Error leyendo yaw real: {e}")
+    return None
+
+
 def _goto_rel_worker_impl(self,
                           dx_cm: float, dy_cm: float, dz_cm: float = 0.0,
                           yaw_deg: Optional[float] = None,
@@ -150,19 +164,74 @@ def _goto_rel_worker_impl(self,
     speed = int(speed_cm_s) if speed_cm_s else _DEFAULT_SPEED
     speed = max(10, min(100, speed))
 
-    # Rotación inicial si se especifica yaw o face_target
+    # CRÍTICO: Leer el yaw REAL del dron, no confiar en _commanded_yaw
+    # El dron puede haber derivado durante el vuelo
+    real_yaw = _get_real_yaw(self)
+    if real_yaw is not None:
+        # Convertir a rango [-180, 180] para consistencia
+        if real_yaw > 180:
+            real_yaw = real_yaw - 360
+        current_yaw_before = real_yaw
+        print(f"[goto] Yaw REAL del dron: {current_yaw_before:.1f}°")
+    else:
+        # Fallback a _commanded_yaw si no podemos leer
+        current_yaw_before = getattr(self, "_commanded_yaw", None)
+        if current_yaw_before is None:
+            current_yaw_before = getattr(self.pose, "yaw_deg", 0.0) or 0.0
+        print(f"[goto] Yaw (fallback _commanded): {current_yaw_before:.1f}°")
+
+    # Guardar el yaw comandado para usar en cálculos
+    commanded_yaw = current_yaw_before
+
     if yaw_deg is not None:
-        if not _rotate_to_yaw(self, float(yaw_deg)):
-            print("[goto] Error en giro inicial.")
-            return
-        time.sleep(0.3)
+        # Calcular rotación necesaria desde el yaw REAL
+        delta = (float(yaw_deg) - current_yaw_before) % 360.0
+        if delta > 180:
+            delta = delta - 360
+        if abs(delta) >= 1.0:
+            if delta > 0:
+                self.cw(int(round(delta)))
+            else:
+                self.ccw(int(round(-delta)))
+            time.sleep(0.3)
+            # CRÍTICO: Leer yaw REAL después de rotar
+            real_yaw_after = _get_real_yaw(self)
+            if real_yaw_after is not None:
+                if real_yaw_after > 180:
+                    real_yaw_after = real_yaw_after - 360
+                commanded_yaw = real_yaw_after
+                print(f"[goto] Yaw REAL tras rotar: {commanded_yaw:.1f}°")
+            else:
+                commanded_yaw = float(yaw_deg)
+        else:
+            commanded_yaw = current_yaw_before
+        self._commanded_yaw = commanded_yaw
     elif face_target and (abs(dx_cm) > _TOL_XY_CM or abs(dy_cm) > _TOL_XY_CM):
         target_angle = math.degrees(math.atan2(dy_cm, dx_cm))
-        print(f"[goto] Rotando hacia destino: {target_angle:.1f}°")
-        if not _rotate_to_yaw(self, target_angle):
-            print("[goto] Error en giro hacia destino.")
-            return
-        time.sleep(0.3)
+        print(f"[goto] face_target: dx={dx_cm:.1f}, dy={dy_cm:.1f} → ángulo destino: {target_angle:.1f}°")
+        # Calcular rotación necesaria desde el yaw REAL
+        delta = (target_angle - current_yaw_before) % 360.0
+        if delta > 180:
+            delta = delta - 360
+        if abs(delta) >= 1.0:
+            if delta > 0:
+                self.cw(int(round(delta)))
+            else:
+                self.ccw(int(round(-delta)))
+            time.sleep(0.3)
+            # CRÍTICO: Leer yaw REAL después de rotar
+            real_yaw_after = _get_real_yaw(self)
+            if real_yaw_after is not None:
+                if real_yaw_after > 180:
+                    real_yaw_after = real_yaw_after - 360
+                commanded_yaw = real_yaw_after
+                print(f"[goto] Yaw REAL tras rotar: {commanded_yaw:.1f}°")
+            else:
+                commanded_yaw = target_angle
+        else:
+            commanded_yaw = current_yaw_before
+        self._commanded_yaw = commanded_yaw
+        print(f"[goto] Yaw para movimiento: {commanded_yaw:.1f}°")
 
     # Calcular desplazamiento total restante
     dx_remaining = float(dx_cm)
@@ -214,8 +283,8 @@ def _goto_rel_worker_impl(self,
             seg_dz = dz_remaining
 
         # Convertir a coordenadas locales del dron
-        current_yaw = getattr(self.pose, "yaw_deg", 0.0) or 0.0
-        x_local, y_local = _world_to_local(seg_dx, seg_dy, current_yaw)
+        # IMPORTANTE: Usar commanded_yaw, NO pose.yaw_deg (telemetría puede sobrescribirlo)
+        x_local, y_local = _world_to_local(seg_dx, seg_dy, commanded_yaw)
 
         # Redondear a enteros
         x_local_i = int(round(x_local))

@@ -81,14 +81,47 @@ def _takeOff(self, altura_objetivo_m=0.5, blocking=True):
             if pose is not None:
                 pose.reset()
                 pose.z_cm = float(h)  # Establecemos Z a la altura barométrica actual
-                pose.yaw_deg = 0.0    # el rumbo actual pasa a ser 0° relativo
-        except Exception:
-            pass
+
+                # IMPORTANTE: Leer el yaw REAL del dron, no asumir 0
+                real_yaw = None
+                try:
+                    if hasattr(self, "_tello") and self._tello:
+                        gy = getattr(self._tello, "get_yaw", None)
+                        if callable(gy):
+                            real_yaw = gy()
+                            print(f"[takeOff] Yaw real del dron: {real_yaw}°")
+                except Exception as e:
+                    print(f"[takeOff] No se pudo leer yaw: {e}")
+
+                # Si obtuvimos el yaw real, guardarlo como referencia
+                # El sistema usará yaw relativo = 0, pero yaw0_deg guarda el absoluto
+                if real_yaw is not None:
+                    pose.yaw0_deg = float(real_yaw)  # Yaw absoluto de referencia
+                    pose.yaw_deg = 0.0  # Yaw relativo empieza en 0
+                    self._pose_takeoff_synced = True  # Evitar que telemetry lo sobrescriba
+                    self._commanded_yaw = 0.0  # Resetear yaw comandado para goto
+                    print(f"[takeOff] Pose inicializada: yaw_relativo=0°, yaw_referencia={real_yaw}°")
+                else:
+                    pose.yaw_deg = 0.0
+                    pose.yaw0_deg = 0.0
+                    self._pose_takeoff_synced = True  # Marcar igualmente
+                    self._commanded_yaw = 0.0  # Resetear yaw comandado para goto
+                    print("[takeOff] WARNING: No se pudo leer yaw, asumiendo 0°")
+        except Exception as e:
+            print(f"[takeOff] Error inicializando pose: {e}")
 
         # Subida adicional si la altura objetivo es mayor que la actual
         target_h_cm = int(altura_objetivo_m * 100)
         if h < target_h_cm:
             _ascend_to_target(self, target_h_cm - h)
+            # Actualizar pose.z_cm a la altura objetivo
+            try:
+                pose = getattr(self, "pose", None)
+                if pose is not None:
+                    pose.z_cm = float(target_h_cm)
+                    print(f"[takeOff] Pose.z actualizada: {target_h_cm} cm")
+            except Exception:
+                pass
             print(f"Altura objetivo alcanzada (~{target_h_cm} cm).")
 
         #Pausa al final

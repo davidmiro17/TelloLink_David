@@ -53,16 +53,16 @@ def rotate(self, deg):
                 # Respuesta inesperada real
                 raise RuntimeError(f"{verb} {paso} -> {resp}")
 
-        # >> POSE: actualizar yaw si existe pose y el SDK aceptó el giro
-        # Solo actualizar si no esperamos (si esperamos, la telemetría ya actualizó el yaw)
-        if not waited_for_rotation:
-            try:
-                if hasattr(self, "pose") and self.pose is not None:
-                    # deg>0 = cw; deg<0 = ccw. 'paso' es magnitud positiva.
-                    delta = float(paso) if verb == "cw" else -float(paso)
-                    self.pose.update_yaw(delta)
-            except Exception:
-                pass
+        # >> POSE: actualizar yaw SIEMPRE después de una rotación exitosa
+        # NOTA: No confiar en telemetría para esto - puede no estar activa o retrasada
+        try:
+            if hasattr(self, "pose") and self.pose is not None:
+                # deg>0 = cw; deg<0 = ccw. 'paso' es magnitud positiva.
+                delta = float(paso) if verb == "cw" else -float(paso)
+                self.pose.update_yaw(delta)
+                print(f"[heading] Yaw actualizado: delta={delta:.1f}° → yaw={self.pose.yaw_deg:.1f}°")
+        except Exception as e:
+            print(f"[heading] Error actualizando yaw: {e}")
         # <<< POSE
 
         restante = restante - paso #Lo que queda pendiente por girar se actualiza para volver al bucle, y girar finalmente

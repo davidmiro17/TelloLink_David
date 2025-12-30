@@ -58,6 +58,14 @@ def _rel_from_abs(self, wp_abs: Dict[str, Any]) -> tuple[float, float, float]:
     dx = float(x_goal) - float(self.pose.x_cm)
     dy = float(y_goal) - float(self.pose.y_cm)
     dz = float(z_goal) - float(self.pose.z_cm)
+
+    # DEBUG: Mostrar cálculo de movimiento
+    print(f"[_rel_from_abs] ════════════════════════════════════")
+    print(f"[_rel_from_abs] Pose actual: x={self.pose.x_cm:.1f}, y={self.pose.y_cm:.1f}, z={self.pose.z_cm:.1f}, yaw={self.pose.yaw_deg:.1f}°")
+    print(f"[_rel_from_abs] Destino WP:  x={x_goal:.1f}, y={y_goal:.1f}, z={z_goal:.1f}")
+    print(f"[_rel_from_abs] Delta calc:  dx={dx:.1f}, dy={dy:.1f}, dz={dz:.1f}")
+    print(f"[_rel_from_abs] ════════════════════════════════════")
+
     return dx, dy, dz
 
 
