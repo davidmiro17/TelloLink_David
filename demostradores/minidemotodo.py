@@ -1001,16 +1001,45 @@ class MiniRemoteApp:
     def take_snapshot(self):
         with self._frame_lock:
             frame = None if self._last_bgr is None else self._last_bgr.copy()
+            frame_age = time.monotonic() - self._last_frame_time if self._last_frame_time > 0 else float('inf')
+
+        # Verificar que el frame existe y es reciente (< 3 segundos)
         if frame is None:
             self._hud_show("Sin frame", 1.5)
-            return
+            print("[take_snapshot] ERROR: No hay frame disponible")
+            return False
+
+        if frame_age > 3.0:
+            print(f"[take_snapshot] WARNING: Frame antiguo ({frame_age:.1f}s), intentando capturar uno nuevo...")
+            # Intentar capturar un frame nuevo directamente
+            if hasattr(self, '_cv_cap') and self._cv_cap is not None and self._cv_cap.isOpened():
+                for _ in range(10):  # Máximo 10 intentos
+                    ret, new_frame = self._cv_cap.read()
+                    if ret and new_frame is not None:
+                        frame = new_frame
+                        print("[take_snapshot] Frame nuevo capturado correctamente")
+                        break
+                    time.sleep(0.1)
+                else:
+                    print("[take_snapshot] ERROR: No se pudo capturar frame nuevo")
+                    self._hud_show("Error: Sin video", 1.5)
+                    return False
+            else:
+                print("[take_snapshot] ERROR: Stream no disponible")
+                self._hud_show("Error: Sin stream", 1.5)
+                return False
+
         # Usar gestor de sesiones para obtener ruta
         path = self._session_manager.get_photo_path()
         try:
             cv2.imwrite(path, frame)
             self._hud_show("Foto guardada", 1.8)
-        except Exception:
+            print(f"[take_snapshot] Foto guardada: {path}")
+            return True
+        except Exception as e:
+            print(f"[take_snapshot] ERROR al guardar: {e}")
             self._hud_show("Error", 1.5)
+            return False
 
     def toggle_recording(self):
         if self._rec_running:
@@ -1046,20 +1075,31 @@ class MiniRemoteApp:
     def _recording_thread_func(self):
         """Hilo dedicado para grabación de video, independiente del FPV visual."""
         print("[_recording_thread] Iniciando hilo de grabación")
-        if self._fpv_record_enabled:
-            return
+
+        # Diagnóstico inicial del stream
+        cap_exists = hasattr(self, '_cv_cap') and self._cv_cap is not None
+        cap_opened = cap_exists and self._cv_cap.isOpened()
+        print(f"[_recording_thread] Estado stream: cap_exists={cap_exists}, cap_opened={cap_opened}")
+
+        if not cap_opened:
+            print("[_recording_thread] ERROR: Stream no disponible, intentando reiniciar...")
+            if not self._ensure_stream_ready(retries=2, wait_s=2.0):
+                print("[_recording_thread] ERROR: No se pudo iniciar el stream, abortando grabación")
+                return
+
         frames_sin_datos = 0
         last_log_time = time.time()
         target_fps = self._rec_fps  # 30fps
         frame_interval = 1.0 / target_fps  # ~33ms
         next_frame_time = time.monotonic()
         last_good_frame = None
+        first_frame_logged = False
 
         while self._rec_running:
             try:
                 frame = None
 
-                # Hilo dedicado solo cuando FPV no esté grabando
+                # Leer frame del stream
                 if hasattr(self, '_cv_cap') and self._cv_cap is not None and self._cv_cap.isOpened():
                     ret, direct_frame = self._cv_cap.read()
                     if ret and direct_frame is not None:
@@ -1068,6 +1108,12 @@ class MiniRemoteApp:
                             self._last_bgr = frame
                             self._rec_last_good_frame = frame
                             self._last_frame_time = time.monotonic()
+                        if not first_frame_logged:
+                            print(f"[_recording_thread] Primer frame recibido: {frame.shape}")
+                            first_frame_logged = True
+                    else:
+                        if frames_sin_datos == 0:
+                            print(f"[_recording_thread] cv_cap.read() falló: ret={ret}")
 
                 if frame is not None:
                     frames_sin_datos = 0
@@ -1080,7 +1126,7 @@ class MiniRemoteApp:
                         print(f"[_recording_thread] Creando writer con tamaño {w}x{h}")
                         self._start_writer((w, h))
 
-                # Escribir frame (limitado a target_fps, rellenando si falta señal)
+                # Escribir frame (limitado a target_fps)
                 now = time.monotonic()
                 if now >= next_frame_time:
                     if self._rec_writer is not None and last_good_frame is not None:
@@ -1094,14 +1140,19 @@ class MiniRemoteApp:
                             last_log_time = time.time()
                 else:
                     time.sleep(0.005)
+
                 if frame is None:
                     frames_sin_datos += 1
                     if frames_sin_datos == 30:
-                        print("[_recording_thread] WARNING: No hay frames disponibles")
+                        print("[_recording_thread] WARNING: 30 lecturas sin frames")
+                    elif frames_sin_datos == 100:
+                        print("[_recording_thread] ERROR: 100 lecturas sin frames, stream probablemente muerto")
                     time.sleep(0.01)
 
             except Exception as e:
                 print(f"[_recording_thread] Error: {e}")
+                import traceback
+                traceback.print_exc()
                 time.sleep(0.05)
 
         print(f"[_recording_thread] Hilo terminado, frames grabados: {self._rec_frame_count}")
@@ -1159,8 +1210,8 @@ class MiniRemoteApp:
         # Iniciar el flag de grabación
         self._rec_running = True
 
-        # Usar hilo dedicado solo si no hay FPV activo
-        use_dedicated = not self._fpv_running and not self._fpv_ext_running
+        # Usar hilo dedicado si se fuerza O si no hay FPV activo
+        use_dedicated = force_dedicated_thread or (not self._fpv_running and not self._fpv_ext_running)
 
         if use_dedicated:
             self._rec_thread = threading.Thread(target=self._recording_thread_func, daemon=True)
