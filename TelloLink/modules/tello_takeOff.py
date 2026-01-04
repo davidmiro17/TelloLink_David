@@ -127,6 +127,8 @@ def _takeOff(self, altura_objetivo_m=0.5, blocking=True):
         #Pausa al final
         try:
             self._after_takeoff_ts = time.time()
+            self._after_takeoff_mono = time.monotonic()
+            self._stream_needs_refresh = True
         except Exception:
             pass
         time.sleep(0.7)  # ~0.5–0.8s suele ser suficiente

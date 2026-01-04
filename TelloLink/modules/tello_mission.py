@@ -147,10 +147,13 @@ def _mission_worker(self,
         try:
             # Nota: goto_rel ya maneja yaw opcional al inicio del movimiento
             # face_target hace que el dron rote para mirar hacia el destino antes de moverse
-            self.goto_rel(dx_cm=dx, dy_cm=dy, dz_cm=dz, yaw_deg=yaw,
-                         face_target=face_target, blocking=True)
+            moved_ok = self.goto_rel(dx_cm=dx, dy_cm=dy, dz_cm=dz, yaw_deg=yaw,
+                                     face_target=face_target, blocking=True)
         except Exception as e:
             print(f"[mission] Error en goto_rel de WP{idx}: {e}")
+            break
+        if moved_ok is False:
+            print(f"[mission] Movimiento fallido en WP{idx}; abortando acciones.")
             break
 
         # ═══════════════════════════════════════════════════════════════

@@ -80,7 +80,8 @@ def _send_go_command(self, x_local: int, y_local: int, z: int, speed: int):
         if is_numeric:
             # Respuesta numérica = probable race condition con batería
             wait_time = max(0.5, estimated_time + 0.5)
-            print(f"[goto] Respuesta numérica ({resp}), movimiento en progreso (~{wait_time:.1f}s)...")
+            print(f"[goto] Respuesta numérica ({resp}); posible colisión con battery? keepalive")
+            print(f"[goto] Movimiento en progreso (~{wait_time:.1f}s)...")
             return (True, wait_time)
 
         # "ok" puede significar:
@@ -106,18 +107,22 @@ def _goto_rel_worker(self,
                      speed_cm_s: Optional[float] = None,
                      face_target: bool = False,
                      callback: Optional[Callable[..., Any]] = None,
-                     params: Any = None) -> None:
+                     params: Any = None,
+                     result_holder: Optional[dict] = None) -> None:
     """
     Worker que ejecuta el movimiento usando el comando 'go x y z speed'.
     """
     # Marcar que goto está en progreso (evita double-update con telemetry)
     setattr(self, "_goto_in_progress", True)
 
+    ok = False
     try:
-        _goto_rel_worker_impl(self, dx_cm, dy_cm, dz_cm, yaw_deg, speed_cm_s,
-                              face_target, callback, params)
+        ok = _goto_rel_worker_impl(self, dx_cm, dy_cm, dz_cm, yaw_deg, speed_cm_s,
+                                   face_target, callback, params)
     finally:
         setattr(self, "_goto_in_progress", False)
+        if result_holder is not None:
+            result_holder["ok"] = ok
 
 
 def _get_real_yaw(self) -> Optional[float]:
@@ -138,26 +143,26 @@ def _goto_rel_worker_impl(self,
                           speed_cm_s: Optional[float] = None,
                           face_target: bool = False,
                           callback: Optional[Callable[..., Any]] = None,
-                          params: Any = None) -> None:
+                          params: Any = None) -> bool:
 
     # Chequeos básicos previos
     if not hasattr(self, "pose") or self.pose is None:
         print("[goto] No hay PoseVirtual; abortando.")
-        return
+        return False
     if getattr(self, "state", "") == "disconnected":
         print("[goto] Dron desconectado; abortando.")
-        return
+        return False
     bat = getattr(self, "battery_pct", None)
     if isinstance(bat, int) and bat < _MIN_BAT_PCT:
         print(f"[goto] Batería baja ({bat}%), abortando.")
-        return
+        return False
 
     # Si el dron no está volando, despegar
     if getattr(self, "state", "") != "flying":
         ok = self.takeOff(0.5, blocking=True)
         if not ok:
             print("[goto] No se pudo despegar.")
-            return
+            return False
         time.sleep(0.4)
 
     # Velocidad
@@ -251,23 +256,24 @@ def _goto_rel_worker_impl(self,
             except TypeError:
                 try: callback()
                 except: pass
-        return
+        return True
 
     num_segments = max(1, int(math.ceil(total_dist / _MAX_GO_CM)))
 
     print(f"[goto] Distancia total: {total_dist:.0f}cm en {num_segments} segmento(s)")
 
+    success_any = False
     for seg in range(num_segments):
         # Verificar aborto
         if getattr(self, "_goto_abort", False):
             print("[goto] Abortado por solicitud externa.")
-            return
+            return False
 
         # Verificar batería
         bat = getattr(self, "battery_pct", None)
         if isinstance(bat, int) and bat < _MIN_BAT_PCT:
             print(f"[goto] Abortado por batería ({bat}%).")
-            return
+            return False
 
         # Calcular el segmento actual
         if seg < num_segments - 1:
@@ -309,6 +315,7 @@ def _goto_rel_worker_impl(self,
         success, wait_time = _send_go_command(self, x_local_i, y_local_i, z_i, speed)
 
         if success:
+            success_any = True
             if wait_time > 0:
                 # Interpolar posición durante la espera (actualización visual)
                 update_interval = 0.1  # 100ms entre actualizaciones
@@ -352,6 +359,10 @@ def _goto_rel_worker_impl(self,
         except TypeError:
             try: callback()
             except: pass
+    if not success_any:
+        print("[goto] WARNING: Ningún segmento confirmó movimiento; abortando.")
+        return False
+    return True
 
 
 def goto_rel(self,
@@ -365,14 +376,17 @@ def goto_rel(self,
 
     setattr(self, "_goto_abort", False)
 
+    result_holder = {"ok": False}
     t = threading.Thread(
         target=_goto_rel_worker,
-        args=(self, dx_cm, dy_cm, dz_cm, yaw_deg, speed_cm_s, face_target, callback, params),
+        args=(self, dx_cm, dy_cm, dz_cm, yaw_deg, speed_cm_s, face_target, callback, params, result_holder),
         daemon=True
     )
     t.start()
     if blocking:
         t.join()
+        return result_holder["ok"]
+    return None
 
 
 def abort_goto(self) -> None:
