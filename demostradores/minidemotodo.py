@@ -30,15 +30,6 @@ import cv2
 from PIL import Image, ImageTk
 import numpy as np
 
-# Reducir ruido de OpenCV/FFmpeg en consola
-try:
-    if hasattr(cv2, "setLogLevel"):
-        cv2.setLogLevel(3)  # ERROR
-    elif hasattr(cv2, "utils") and hasattr(cv2.utils, "logging"):
-        cv2.utils.logging.setLogLevel(cv2.utils.logging.LOG_LEVEL_ERROR)
-except Exception:
-    pass
-
 try:
     from shapely.geometry import Point, Polygon
 except ImportError:
@@ -167,7 +158,6 @@ class MiniRemoteApp:
         self._rec_expected_frames = None
         self._rec_last_good_frame = None
         self._rec_force_direct = False
-        self._rec_start_time = 0.0
         self._fpv_record_enabled = False
         # FPV externo (ventana OpenCV)
         self._fpv_ext_running = False
@@ -603,17 +593,10 @@ class MiniRemoteApp:
                         continue
 
                     st = getattr(self.dron, "state", "")
-                    mission_running = getattr(self, "_mission_running", False)
-                    goto_in_progress = getattr(self.dron, "_goto_in_progress", False)
                     if st == "flying":
-                        if mission_running or goto_in_progress:
-                            print("[keepalive] Pausado (misión/goto en curso)")
-                            time.sleep(0.2)
-                            continue
                         last_rc_time = getattr(self, "_last_rc_sent", 0)
                         if time.time() - last_rc_time > 2.0:
                             try:
-                                print("[keepalive] Enviando battery? (sin RC reciente)")
                                 self.dron._send("battery?")
                             except Exception:
                                 pass
@@ -847,30 +830,8 @@ class MiniRemoteApp:
         except Exception:
             pass
 
-    def _ensure_stream_ready(self, retries=3, wait_s=5.0, prefer_reader=False):
+    def _ensure_stream_ready(self, retries=3, wait_s=5.0):
         """Asegura que el stream de vídeo entrega frames válidos."""
-        if prefer_reader:
-            if hasattr(self.dron, "_tello"):
-                try:
-                    self._frame_reader = self.dron._tello.get_frame_read()
-                    frame = getattr(self._frame_reader, "frame", None)
-                    if frame is not None:
-                        with self._frame_lock:
-                            self._last_bgr = frame
-                            self._last_frame_time = time.monotonic()
-                        print("[stream] Frame_reader listo (modo preferente).")
-                        return True
-                except Exception:
-                    pass
-            print("[stream] Frame_reader no disponible; abortando sin intentos UDP.")
-            return False
-        stream_urls = [
-            "udp://0.0.0.0:11111?timeout=5000000",
-            "udp://@0.0.0.0:11111",
-            "udp://127.0.0.1:11111"
-        ]
-        if retries <= 0:
-            return False
         for attempt in range(1, retries + 1):
             try:
                 if hasattr(self.dron, "_tello"):
@@ -879,55 +840,41 @@ class MiniRemoteApp:
                     self.dron._tello.streamon()
                     time.sleep(0.5)
 
-            except Exception as e:
-                print(f"[stream] Error en intento {attempt}: {e}")
-
-            for stream_url in stream_urls:
                 if self._cv_cap is not None:
                     try:
                         self._cv_cap.release()
                     except Exception:
                         pass
-                    self._cv_cap = None
 
                 # Configurar VideoCapture con timeout reducido (5 segundos en vez de 30)
                 # El timeout de FFmpeg se controla con stimeout (microsegundos)
+                stream_url = "udp://0.0.0.0:11111?timeout=5000000"  # 5 segundos
                 self._cv_cap = cv2.VideoCapture(stream_url, cv2.CAP_FFMPEG)
                 self._cv_cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-                print(f"[stream] Intento {attempt}/{retries} usando {stream_url}: esperando frames...")
 
-                # Esperar frames válidos (ignorar los primeros corruptos)
-                t0 = time.time()
-                frames_received = 0
-                while time.time() - t0 < wait_s:
-                    if self._cv_cap is not None and self._cv_cap.isOpened():
-                        ret, frame = self._cv_cap.read()
-                        if ret and frame is not None:
-                            frames_received += 1
-                            # Aceptar después de recibir algunos frames buenos (ignora los primeros corruptos)
-                            if frames_received >= 3:
-                                with self._frame_lock:
-                                    self._last_bgr = frame
-                                    self._last_frame_time = time.monotonic()
-                                print(f"[stream] Stream listo después de {frames_received} frames ({time.time()-t0:.1f}s)")
-                                return True
-                    time.sleep(0.05)
+                print(f"[stream] Intento {attempt}/{retries}: esperando frames...")
 
-                print(f"[stream] Intento {attempt}/{retries} sin frames válidos (recibidos: {frames_received})")
+            except Exception as e:
+                print(f"[stream] Error en intento {attempt}: {e}")
 
-            # Fallback: usar frame_reader si está disponible
-            try:
-                if hasattr(self.dron, "_tello"):
-                    self._frame_reader = self.dron._tello.get_frame_read()
-                    frame = getattr(self._frame_reader, "frame", None)
-                    if frame is not None:
-                        with self._frame_lock:
-                            self._last_bgr = frame
-                            self._last_frame_time = time.monotonic()
-                        print("[stream] Fallback: frame_reader activo y entregando frames.")
-                        return True
-            except Exception:
-                pass
+            # Esperar frames válidos (ignorar los primeros corruptos)
+            t0 = time.time()
+            frames_received = 0
+            while time.time() - t0 < wait_s:
+                if self._cv_cap is not None and self._cv_cap.isOpened():
+                    ret, frame = self._cv_cap.read()
+                    if ret and frame is not None:
+                        frames_received += 1
+                        # Aceptar después de recibir algunos frames buenos (ignora los primeros corruptos)
+                        if frames_received >= 3:
+                            with self._frame_lock:
+                                self._last_bgr = frame
+                                self._last_frame_time = time.monotonic()
+                            print(f"[stream] Stream listo después de {frames_received} frames ({time.time()-t0:.1f}s)")
+                            return True
+                time.sleep(0.05)
+
+            print(f"[stream] Intento {attempt}/{retries} sin frames válidos (recibidos: {frames_received})")
         return False
 
     #FPV
@@ -947,12 +894,7 @@ class MiniRemoteApp:
             pass
         try:
             if self._cv_cap is None or not self._cv_cap.isOpened():
-                self._ensure_stream_ready(retries=0, wait_s=3.0, prefer_reader=True)
-            if hasattr(self.dron, "_tello") and not hasattr(self, "_frame_reader"):
-                try:
-                    self._frame_reader = self.dron._tello.get_frame_read()
-                except Exception:
-                    pass
+                self._ensure_stream_ready(retries=3, wait_s=3.0)
         except Exception:
             pass
         self._fpv_running = True
@@ -1003,11 +945,6 @@ class MiniRemoteApp:
                 # Leer frame actual sin vaciar agresivamente el buffer (evita saltos/congelación)
                 ok, frame = self._cv_cap.read()
                 if ok and isinstance(frame, np.ndarray) and frame.size > 0:
-                    return frame
-            frame_reader = getattr(self, "_frame_reader", None)
-            if frame_reader is not None:
-                frame = getattr(frame_reader, "frame", None)
-                if isinstance(frame, np.ndarray) and frame.size > 0:
                     return frame
         except Exception:
             pass
@@ -1080,18 +1017,11 @@ class MiniRemoteApp:
         with self._frame_lock:
             frame = None if self._last_bgr is None else self._last_bgr.copy()
             frame_age = time.monotonic() - self._last_frame_time if self._last_frame_time > 0 else float('inf')
-            takeoff_mono = getattr(self.dron, "_after_takeoff_mono", 0.0) if hasattr(self, "dron") else 0.0
-            frame_is_before_takeoff = self._last_frame_time <= takeoff_mono if takeoff_mono else False
 
         # Verificar que el frame existe y es reciente (< 3 segundos)
         if frame is None:
             self._hud_show("Sin frame", 1.5)
             print("[take_snapshot] ERROR: No hay frame disponible")
-            return False
-
-        if frame_is_before_takeoff:
-            print("[take_snapshot] WARNING: Frame anterior al despegue, ignorando.")
-            self._hud_show("Frame antiguo", 1.5)
             return False
 
         if frame_age > 3.0:
@@ -1225,7 +1155,6 @@ class MiniRemoteApp:
         frame_interval = 1.0 / target_fps
         next_frame_time = time.monotonic()
         last_written_time = 0
-        rec_start_time = getattr(self, "_rec_start_time", 0.0)
         first_frame_logged = False
 
         while self._rec_running:
@@ -1235,9 +1164,7 @@ class MiniRemoteApp:
 
                 # Obtener frame del buffer compartido con FPV
                 with self._frame_lock:
-                    if (self._last_bgr is not None
-                            and self._last_frame_time > last_written_time
-                            and self._last_frame_time > rec_start_time):
+                    if self._last_bgr is not None and self._last_frame_time > last_written_time:
                         frame = self._last_bgr.copy()
                         frame_time = self._last_frame_time
 
@@ -1405,7 +1332,7 @@ class MiniRemoteApp:
 
         if need_stream:
             print("[_start_recording] Iniciando stream de video...")
-            if not self._ensure_stream_ready(retries=0, wait_s=3.0, prefer_reader=True):
+            if not self._ensure_stream_ready(retries=3, wait_s=3.0):
                 print("[_start_recording] ERROR: No se pudo estabilizar el stream, abortando grabación")
                 self._hud_show("Error: Sin stream", 2.0)
                 return False
@@ -1414,13 +1341,9 @@ class MiniRemoteApp:
         print("[_start_recording] Esperando frames del stream...")
         max_wait = 50  # 5 segundos máximo
         frame_found = False
-        start_mark = time.monotonic()
-        takeoff_mono = getattr(self.dron, "_after_takeoff_mono", 0.0) if hasattr(self, "dron") else 0.0
         for i in range(max_wait):
             with self._frame_lock:
-                if (self._last_bgr is not None
-                        and self._last_frame_time > start_mark
-                        and (not takeoff_mono or self._last_frame_time > takeoff_mono)):
+                if self._last_bgr is not None:
                     print(f"[_start_recording] Frame disponible después de {i*0.1:.1f}s")
                     frame_found = True
                     break
@@ -1432,7 +1355,6 @@ class MiniRemoteApp:
             return False
 
         # Iniciar el flag de grabación
-        self._rec_start_time = time.monotonic()
         self._rec_running = True
 
         # Usar hilo dedicado si se fuerza O si no hay FPV activo
@@ -1574,7 +1496,6 @@ class MiniRemoteApp:
                         # Guardar para snapshots
                         with self._frame_lock:
                             self._last_bgr = frame.copy()
-                            self._last_frame_time = time.monotonic()
 
                         # Grabación (en el mismo hilo para evitar conflictos FFmpeg)
                         if self._rec_running:
@@ -2654,14 +2575,31 @@ class MiniRemoteApp:
         zmax = int(layers[max(selected)]["z_max"])
         return zmin, zmax
 
+    def _get_selected_layers(self):
+        """Devuelve la lista de capas seleccionadas (1, 2, 3) desde los checkboxes."""
+        c1 = getattr(self, '_draw_layer_c1', None)
+        c2 = getattr(self, '_draw_layer_c2', None)
+        c3 = getattr(self, '_draw_layer_c3', None)
+
+        selected = []
+        if c1 and c1.get():
+            selected.append(1)
+        if c2 and c2.get():
+            selected.append(2)
+        if c3 and c3.get():
+            selected.append(3)
+
+        return selected if selected else [1, 2, 3]  # Si ninguna, todas
+
     def _add_exclusion_circle(self, wx, wy):
 
         r = float(self._circle_radius_var.get() or 30.0)
 
         # Obtener Z según las capas seleccionadas (checkboxes)
         zmin, zmax = self._get_layer_z_range()
+        selected_layers = self._get_selected_layers()
 
-        self._excl_circles.append({"cx": wx, "cy": wy, "r": r, "zmin": zmin, "zmax": zmax})
+        self._excl_circles.append({"cx": wx, "cy": wy, "r": r, "zmin": zmin, "zmax": zmax, "layers": selected_layers})
 
         try:
             if hasattr(self.dron, "add_exclusion_circle"):
@@ -2699,10 +2637,11 @@ class MiniRemoteApp:
 
             # Obtener Z según las capas seleccionadas (checkboxes)
             zmin, zmax = self._get_layer_z_range()
+            selected_layers = self._get_selected_layers()
 
             # Crear polígono rectangular (4 esquinas)
             rect_poly = [(x1, y1), (x2, y1), (x2, y2), (x1, y2)]
-            self._excl_polys.append({"poly": rect_poly, "zmin": zmin, "zmax": zmax})
+            self._excl_polys.append({"poly": rect_poly, "zmin": zmin, "zmax": zmax, "layers": selected_layers})
 
             try:
                 if hasattr(self.dron, "add_exclusion_poly"):
@@ -2739,8 +2678,9 @@ class MiniRemoteApp:
 
         # Obtener Z según las capas seleccionadas (checkboxes)
         zmin, zmax = self._get_layer_z_range()
+        selected_layers = self._get_selected_layers()
 
-        self._excl_polys.append({"poly": list(self._poly_points), "zmin": zmin, "zmax": zmax})
+        self._excl_polys.append({"poly": list(self._poly_points), "zmin": zmin, "zmax": zmax, "layers": selected_layers})
 
         try:
             if hasattr(self.dron, "add_exclusion_poly"):
@@ -2937,8 +2877,9 @@ class MiniRemoteApp:
             messagebox.showinfo("Sin selección", "Primero selecciona un obstáculo con ✋")
             return
 
-        # Obtener zmin/zmax de los checkboxes seleccionados
+        # Obtener zmin/zmax y lista de capas de los checkboxes seleccionados
         zmin, zmax = self._get_layer_z_range()
+        selected_layers = self._get_selected_layers()
 
         idx = self._map_selected_obs_idx
         obs_type = self._map_selected_obs_type
@@ -2952,10 +2893,11 @@ class MiniRemoteApp:
                     'r': orig['r'],
                     'zmin': zmin,
                     'zmax': zmax,
+                    'layers': selected_layers,
                     'nombre': orig.get('nombre', '')
                 }
                 self._excl_circles.append(new_obs)
-                print(f"[MAP] Círculo duplicado a capa {zmin}-{zmax}cm")
+                print(f"[MAP] Círculo duplicado a capas {selected_layers}")
 
                 # Sincronizar con backend
                 if hasattr(self.dron, "add_exclusion_circle"):
@@ -2971,10 +2913,11 @@ class MiniRemoteApp:
                     'poly': list(orig['poly']),  # Copia de los puntos
                     'zmin': zmin,
                     'zmax': zmax,
+                    'layers': selected_layers,
                     'nombre': orig.get('nombre', '')
                 }
                 self._excl_polys.append(new_obs)
-                print(f"[MAP] Polígono duplicado a capa {zmin}-{zmax}cm")
+                print(f"[MAP] Polígono duplicado a capas {selected_layers}")
 
                 # Sincronizar con backend
                 if hasattr(self.dron, "add_exclusion_polygon"):
@@ -3358,11 +3301,15 @@ class MiniRemoteApp:
 
     def _get_exclusion_layers(self, exclusion):
         """Determina qué capas ocupa una exclusión."""
+        # Si el obstáculo tiene el campo 'layers' explícito, usarlo directamente
+        if 'layers' in exclusion and exclusion['layers']:
+            return list(exclusion['layers'])
+
         # Intentar usar el método del dron
         if hasattr(self.dron, "get_exclusion_layers"):
             return self.dron.get_exclusion_layers(exclusion)
 
-        # Fallback: calcular localmente
+        # Fallback: calcular localmente desde zmin/zmax
         excl_zmin = exclusion.get("zmin")
         excl_zmax = exclusion.get("zmax")
 
@@ -4867,6 +4814,22 @@ class MiniRemoteApp:
         zmax = int(layers[max(selected)]["z_max"])
         return zmin, zmax
 
+    def _get_mission_selected_layers(self):
+        """Devuelve la lista de capas seleccionadas (1, 2, 3) desde los checkboxes del Editor."""
+        c1 = getattr(self, '_mission_layer_c1', None)
+        c2 = getattr(self, '_mission_layer_c2', None)
+        c3 = getattr(self, '_mission_layer_c3', None)
+
+        selected = []
+        if c1 and c1.get():
+            selected.append(1)
+        if c2 and c2.get():
+            selected.append(2)
+        if c3 and c3.get():
+            selected.append(3)
+
+        return selected if selected else [1, 2, 3]  # Si ninguna, todas
+
     def _draw_mission_map(self):
         """Dibuja el mapa de misiones."""
         if not hasattr(self, '_mission_canvas') or not self._mission_canvas:
@@ -5240,7 +5203,8 @@ class MiniRemoteApp:
         elif tool == "obstacle":
             r = self._mission_obs_radius.get()
             zmin, zmax = self._get_mission_layer_z_range()
-            obs = {'type': 'circle', 'cx': round(wx, 1), 'cy': round(wy, 1), 'r': r, 'zmin': zmin, 'zmax': zmax}
+            selected_layers = self._get_mission_selected_layers()
+            obs = {'type': 'circle', 'cx': round(wx, 1), 'cy': round(wy, 1), 'r': r, 'zmin': zmin, 'zmax': zmax, 'layers': selected_layers}
             self._mission_exclusions.append(obs)
             self._draw_mission_map()
 
@@ -5249,11 +5213,12 @@ class MiniRemoteApp:
             if len(self._mission_rect_points) == 2:
                 p1, p2 = self._mission_rect_points
                 zmin, zmax = self._get_mission_layer_z_range()
+                selected_layers = self._get_mission_selected_layers()
                 obs = {
                     'type': 'rect',
                     'x1': min(p1[0], p2[0]), 'y1': min(p1[1], p2[1]),
                     'x2': max(p1[0], p2[0]), 'y2': max(p1[1], p2[1]),
-                    'zmin': zmin, 'zmax': zmax
+                    'zmin': zmin, 'zmax': zmax, 'layers': selected_layers
                 }
                 self._mission_exclusions.append(obs)
                 self._mission_rect_points.clear()
@@ -5449,7 +5414,8 @@ class MiniRemoteApp:
         n_points = len(self._mission_poly_points)
         if n_points >= 3:
             zmin, zmax = self._get_mission_layer_z_range()
-            obs = {'type': 'poly', 'points': list(self._mission_poly_points), 'zmin': zmin, 'zmax': zmax}
+            selected_layers = self._get_mission_selected_layers()
+            obs = {'type': 'poly', 'points': list(self._mission_poly_points), 'zmin': zmin, 'zmax': zmax, 'layers': selected_layers}
             self._mission_exclusions.append(obs)
             self._mission_poly_points.clear()
             self._draw_mission_map()
@@ -5460,7 +5426,12 @@ class MiniRemoteApp:
             messagebox.showinfo("Sin polígono", "Primero dibuja puntos con la herramienta ⬡")
 
     def _get_mission_exclusion_layers(self, obs):
-        """Determina en qué capas está un obstáculo basándose en su zmin/zmax."""
+        """Determina en qué capas está un obstáculo."""
+        # Si el obstáculo tiene el campo 'layers' explícito, usarlo directamente
+        if 'layers' in obs and obs['layers']:
+            return list(obs['layers'])
+
+        # Fallback: calcular desde zmin/zmax
         zmin = obs.get('zmin', 0)
         zmax = obs.get('zmax', 200)
 
@@ -6306,17 +6277,27 @@ class MiniRemoteApp:
         # Obtener opciones
         return_home = self._mission_return_home_var.get() if hasattr(self, '_mission_return_home_var') else False
 
-        # Si hay media en la misión, abrir stream externo (modo más simple/robusto)
-        has_media = any(
-            wp.get('photo') or wp.get('video') or wp.get('video_start')
-            for wp in self._mission_waypoints
-        )
-        if has_media and not self._fpv_ext_running:
-            print("[mission] Abriendo stream FPV externo para acciones de cámara...")
-            self._mission_status_label.configure(
-                text="Estado: Inicializando FPV externo...", fg="#17a2b8"
-            )
-            self.start_fpv_external()
+        # Si hay vídeos en la misión, mantener el stream vivo con FPV para evitar cortes
+        has_video = any(wp.get('video') or wp.get('video_start') for wp in self._mission_waypoints)
+        if has_video and not self._fpv_running:
+            print("[mission] Preparando stream FPV para grabación...")
+            self.start_fpv()
+            stream_ready = False
+            for i in range(50):  # Timeout 5 segundos
+                with self._frame_lock:
+                    if self._last_bgr is not None:
+                        print(f"[mission] Stream listo después de {i*0.1:.1f}s")
+                        stream_ready = True
+                        break
+                time.sleep(0.1)
+
+            if not stream_ready:
+                print("[mission] ERROR: Timeout esperando frame del stream")
+                if not messagebox.askyesno("Sin Stream",
+                        "No se pudo iniciar el stream de video.\n"
+                        "¿Continuar la misión sin grabar videos?",
+                        parent=self._mission_win):
+                    return
 
         # Registrar la sesión como misión aunque no haya escenario cargado
         if self._session_manager.is_session_active():
@@ -6377,10 +6358,6 @@ class MiniRemoteApp:
 
         if not messagebox.askyesno("Confirmar Misión", confirm_msg, parent=self._mission_win):
             return
-
-        if self._rec_running:
-            print("[mission] Grabación previa detectada; deteniendo antes de la misión.")
-            self._stop_recording()
 
         # ═══════════════════════════════════════════════════════════════
         # SINCRONIZAR OBSTÁCULOS CON GEOFENCE REAL (protección en tiempo real)
@@ -6447,40 +6424,6 @@ class MiniRemoteApp:
 
         total_wps = len(waypoints_to_execute)
 
-        def _refresh_stream_after_takeoff():
-            if not getattr(self.dron, "_stream_needs_refresh", False):
-                return
-            print("[stream] Refrescando frames tras despegue...")
-            updated = False
-            for _ in range(10):
-                frame = self._read_frame_generic()
-                if frame is not None:
-                    with self._frame_lock:
-                        self._last_bgr = frame.copy()
-                        self._last_frame_time = time.monotonic()
-                    updated = True
-                    break
-                time.sleep(0.05)
-            if updated:
-                print("[stream] Frame actualizado tras despegue.")
-            else:
-                print("[stream] WARNING: No se pudo refrescar frame tras despegue.")
-            self.dron._stream_needs_refresh = False
-
-        def _ensure_airborne(action_label, timeout_s=4.0):
-            """Asegura que el dron está en vuelo antes de ejecutar acciones de cámara."""
-            t0 = time.time()
-            while time.time() - t0 < timeout_s:
-                height_cm = getattr(self.dron, "height_cm", 0) or 0
-                takeoff_ts = getattr(self.dron, "_after_takeoff_ts", 0.0) or 0.0
-                takeoff_ok = time.time() - takeoff_ts > 1.0
-                if self.dron.state == "flying" and height_cm >= MISSION_MIN_HEIGHT_CM and takeoff_ok:
-                    _refresh_stream_after_takeoff()
-                    return True
-                time.sleep(0.1)
-            print(f"[mission] WARNING: {action_label} ignorada, dron no está en vuelo aún.")
-            return False
-
         # Callbacks solo para actualizar UI (la lógica está en el módulo)
         def on_wp_arrived(idx, wp_data):
             """Callback al llegar a cada waypoint (idx 0-based)."""
@@ -6510,18 +6453,35 @@ class MiniRemoteApp:
             self._mission_win.after(0, lambda: self._mission_status_label.configure(
                 text=f"WP{idx + 1}: {text}", fg="#17a2b8"))
 
-            # Manejar acciones específicas (flujo igual al joystick)
+            # Manejar acciones específicas
             if action_name == 'photo':
+                # Tomar foto inmediatamente
                 print("[on_action] Ejecutando take_snapshot()")
+                import time as time_module
                 try:
+                    # Asegurar que el stream está activo
                     if not self._fpv_running:
                         print("[on_action] Stream no activo, iniciando FPV...")
                         self.start_fpv()
-                    ok = self.take_snapshot()
-                    if ok:
-                        print("[on_action] Foto guardada correctamente")
-                    else:
-                        print("[on_action] ERROR: No se pudo guardar la foto")
+
+                    # IMPORTANTE: Esperar a un frame NUEVO (no usar frame antiguo)
+                    # Esto evita que la foto se tome con un frame de antes del despegue
+                    start_mark = time_module.monotonic()
+                    print(f"[on_action] Esperando frame nuevo (timestamp > {start_mark:.1f})...")
+                    frame_found = False
+                    for i in range(50):  # Máximo 5 segundos
+                        with self._frame_lock:
+                            if self._last_frame_time > start_mark:
+                                print(f"[on_action] Frame nuevo detectado tras {i*0.1:.1f}s")
+                                frame_found = True
+                                break
+                        time_module.sleep(0.1)
+
+                    if not frame_found:
+                        print("[on_action] WARNING: Timeout esperando frame nuevo, intentando de todas formas...")
+
+                    self.take_snapshot()
+                    print("[on_action] Foto guardada correctamente")
                 except Exception as e:
                     print(f"[on_action] Error tomando foto: {e}")
                     import traceback
@@ -6529,22 +6489,34 @@ class MiniRemoteApp:
             elif action_name == 'video':
                 # Iniciar grabación de video (el mission executor controlará la duración)
                 print(f"[on_action] Iniciando grabación de video")
+                import time as time_module
+
                 try:
-                    if self._rec_running:
-                        print("[on_action] Grabación previa activa; reiniciando.")
-                        self._stop_recording()
-                    if not self._fpv_running:
-                        print("[on_action] Stream no activo, iniciando FPV...")
-                        self.start_fpv()
+                    # Esperar a un frame nuevo después de llegar al waypoint
+                    start_mark = time_module.monotonic()
+                    for i in range(30):  # Máximo ~3s
+                        with self._frame_lock:
+                            if self._last_frame_time > start_mark:
+                                print(f"[on_action] Frame nuevo detectado tras {i*0.1:.1f}s")
+                                break
+                        time_module.sleep(0.1)
+
                     # _start_recording con hilo dedicado para misiones (evita conflictos con FPV loop)
                     duration = 5
                     try:
                         duration = float(self._mission_waypoints[idx].get('video_duration', 5) or 5)
                     except Exception:
                         duration = 5
-                    if not self._start_recording(force_dedicated_thread=True, expected_duration=duration):
-                        print("[on_action] ERROR: No se pudo iniciar la grabación")
-                        return
+                    self._start_recording(force_dedicated_thread=True, expected_duration=duration)
+
+                    # Esperar brevemente a que el hilo empiece a grabar
+                    for i in range(20):  # Máximo 2 segundos
+                        if self._rec_frame_count > 0:
+                            print(f"[on_action] Grabación confirmada, frames: {self._rec_frame_count}")
+                            break
+                        time_module.sleep(0.1)
+                    else:
+                        print(f"[on_action] WARNING: Grabación iniciada pero sin confirmar frames aún")
 
                     print(f"[on_action] Grabación iniciada, mission executor controlará duración")
 
@@ -6559,10 +6531,7 @@ class MiniRemoteApp:
                     frames_recorded = getattr(self, '_rec_frame_count', 0)
                     print(f"[on_action] Deteniendo grabación de video")
                     print(f"[on_action] Total frames grabados: {frames_recorded}")
-                    if self._rec_running:
-                        self._stop_recording()
-                    else:
-                        print("[on_action] WARNING: No había grabación activa.")
+                    self._stop_recording()
 
                     if frames_recorded == 0:
                         print("[on_action] ⚠️ ADVERTENCIA: El video tiene 0 frames")
@@ -6580,16 +6549,30 @@ class MiniRemoteApp:
             elif action_name == 'video_start':
                 # Iniciar grabación continua (sin duración, hasta video_stop)
                 print(f"[on_action] Iniciando grabación continua (hasta video_stop)")
+                import time as time_module
+
                 try:
-                    if self._rec_running:
-                        print("[on_action] WARNING: Grabación ya activa, ignorando video_start.")
-                        return
-                    if not self._fpv_running:
-                        print("[on_action] Stream no activo, iniciando FPV...")
-                        self.start_fpv()
-                    if not self._start_recording(force_dedicated_thread=True, expected_duration=None):
-                        print("[on_action] ERROR: No se pudo iniciar la grabación continua")
-                        return
+                    # IMPORTANTE: Esperar a un frame NUEVO antes de empezar a grabar
+                    # Esto evita grabar frames antiguos del buffer (ej. del despegue)
+                    start_mark = time_module.monotonic()
+                    print(f"[on_action] Esperando frame nuevo (timestamp > {start_mark:.1f})...")
+                    for i in range(30):  # Máximo ~3s
+                        with self._frame_lock:
+                            if self._last_frame_time > start_mark:
+                                print(f"[on_action] Frame nuevo detectado tras {i*0.1:.1f}s")
+                                break
+                        time_module.sleep(0.1)
+
+                    self._start_recording(force_dedicated_thread=True, expected_duration=None)
+
+                    # Esperar brevemente a que el hilo empiece a grabar
+                    for i in range(20):  # Máximo 2 segundos
+                        if self._rec_frame_count > 0:
+                            print(f"[on_action] Grabación continua confirmada, frames: {self._rec_frame_count}")
+                            break
+                        time_module.sleep(0.1)
+                    else:
+                        print(f"[on_action] WARNING: Grabación iniciada pero sin confirmar frames aún")
 
                     print(f"[on_action] Grabación continua activa, continuará hasta video_stop")
 
@@ -6601,9 +6584,6 @@ class MiniRemoteApp:
         def on_finish():
             """Callback al terminar la misión."""
             self._mission_running = False
-            if self._rec_running:
-                print("[mission] Fin de misión: deteniendo grabación pendiente.")
-                self._stop_recording()
             self._mission_win.after(0, lambda: self._mission_status_label.configure(
                 text="Estado: Completada ✓", fg="#28a745"))
             self._mission_win.after(0, lambda: self._mission_exec_btn.configure(state="normal"))
