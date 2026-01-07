@@ -9,7 +9,7 @@ from typing import Optional, Dict, List, Any
 
 
 def sanitize_filename(name: str) -> str:
-    """Convierte un nombre a un nombre de archivo válido."""
+
     # Reemplazar caracteres no válidos
     safe = re.sub(r'[<>:"/\\|?*]', '_', name)
     # Reemplazar espacios múltiples por uno
@@ -21,7 +21,7 @@ def sanitize_filename(name: str) -> str:
 
 
 class ScenarioManager:
-    """Gestiona escenarios (salas) con sus obstáculos y planes de vuelo."""
+
 
     def __init__(self, base_dir: str = "escenarios"):
         self.base_dir = os.path.abspath(base_dir)
@@ -33,26 +33,12 @@ class ScenarioManager:
         if not os.path.exists(self.base_dir):
             os.makedirs(self.base_dir)
 
-    # =========================================================================
-    # CRUD de Escenarios
-    # =========================================================================
+
 
     def create_scenario(self, scenario_id: str, nombre: str,
                         geofence: Dict, capas: Dict,
                         obstaculos: Dict) -> Dict:
-        """
-        Crea un nuevo escenario.
 
-        Args:
-            scenario_id: ID único del escenario (ej: "sala_picasso")
-            nombre: Nombre descriptivo (ej: "Sala Picasso")
-            geofence: {"x1", "y1", "x2", "y2", "zmin", "zmax"}
-            capas: {"c1_max", "c2_max", "c3_max"}
-            obstaculos: {"circles": [...], "polygons": [...]}
-
-        Returns:
-            El escenario creado
-        """
         scenario = {
             "id": scenario_id,
             "nombre": nombre,
@@ -68,12 +54,12 @@ class ScenarioManager:
         return scenario
 
     def save_scenario(self, scenario: Dict) -> bool:
-        """Guarda un escenario existente."""
+
         scenario["modified"] = datetime.now().isoformat()
         return self._save_scenario(scenario)
 
     def _save_scenario(self, scenario: Dict) -> bool:
-        """Guarda el escenario a disco usando el nombre como nombre de archivo."""
+
         scenario_id = scenario.get("id")
         nombre = scenario.get("nombre", scenario_id)
         if not scenario_id:
@@ -92,7 +78,7 @@ class ScenarioManager:
             return False
 
     def load_scenario(self, scenario_id: str) -> Optional[Dict]:
-        """Carga un escenario por su ID o nombre de archivo."""
+
         # Primero intentar cargar por ID (formato antiguo)
         path = os.path.join(self.base_dir, f"{scenario_id}.json")
         if not os.path.exists(path):
@@ -125,7 +111,7 @@ class ScenarioManager:
             return None
 
     def delete_scenario(self, scenario_id: str) -> bool:
-        """Elimina un escenario por ID o nombre."""
+
         # Primero intentar por ID
         path = os.path.join(self.base_dir, f"{scenario_id}.json")
         if not os.path.exists(path):
@@ -157,7 +143,7 @@ class ScenarioManager:
         return False
 
     def list_scenarios(self) -> List[Dict]:
-        """Lista todos los escenarios disponibles."""
+
         scenarios = []
         if not os.path.exists(self.base_dir):
             return scenarios
@@ -180,22 +166,11 @@ class ScenarioManager:
 
         return sorted(scenarios, key=lambda x: x.get("modified") or "", reverse=True)
 
-    # =========================================================================
-    # Gestión de Planes de Vuelo dentro de un Escenario
-    # =========================================================================
+
 
     def add_flight_plan(self, scenario_id: str, plan_id: str, nombre: str,
                         waypoints: List[Dict], return_home: bool = False) -> bool:
-        """
-        Añade un plan de vuelo a un escenario.
 
-        Args:
-            scenario_id: ID del escenario
-            plan_id: ID único del plan (ej: "recorrido_cuadros")
-            nombre: Nombre descriptivo
-            waypoints: Lista de waypoints con acciones
-            return_home: Si debe volver al origen al final
-        """
         scenario = self.load_scenario(scenario_id)
         if not scenario:
             return False
@@ -227,7 +202,7 @@ class ScenarioManager:
         return self.save_scenario(scenario)
 
     def get_flight_plan(self, scenario_id: str, plan_id: str) -> Optional[Dict]:
-        """Obtiene un plan de vuelo específico."""
+
         scenario = self.load_scenario(scenario_id)
         if not scenario:
             return None
@@ -238,7 +213,7 @@ class ScenarioManager:
         return None
 
     def delete_flight_plan(self, scenario_id: str, plan_id: str) -> bool:
-        """Elimina un plan de vuelo de un escenario."""
+
         scenario = self.load_scenario(scenario_id)
         if not scenario:
             return False
@@ -249,7 +224,7 @@ class ScenarioManager:
         return self.save_scenario(scenario)
 
     def list_flight_plans(self, scenario_id: str) -> List[Dict]:
-        """Lista los planes de vuelo de un escenario."""
+
         scenario = self.load_scenario(scenario_id)
         if not scenario:
             return []
@@ -265,42 +240,31 @@ class ScenarioManager:
             for p in scenario.get("planes_vuelo", [])
         ]
 
-    # =========================================================================
-    # Escenario actual
-    # =========================================================================
+
 
     def get_current_scenario(self) -> Optional[Dict]:
-        """Retorna el escenario actualmente cargado."""
+
         return self._current_scenario
 
     def get_current_scenario_id(self) -> Optional[str]:
-        """Retorna el ID del escenario actualmente cargado."""
+
         return self._current_scenario_id
 
     def set_current_scenario(self, scenario_id: str) -> bool:
-        """Establece el escenario actual."""
+
         scenario = self.load_scenario(scenario_id)
         return scenario is not None
 
     def clear_current_scenario(self):
-        """Limpia el escenario actual."""
+
         self._current_scenario = None
         self._current_scenario_id = None
 
-    # =========================================================================
-    # Conversión desde plantillas existentes
-    # =========================================================================
+
 
     def import_from_template(self, template_path: str, scenario_id: str,
                              nombre: str) -> Optional[Dict]:
-        """
-        Importa una plantilla existente como escenario.
 
-        Args:
-            template_path: Ruta al archivo JSON de la plantilla
-            scenario_id: ID para el nuevo escenario
-            nombre: Nombre del escenario
-        """
         try:
             with open(template_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
@@ -354,12 +318,12 @@ class ScenarioManager:
             return self.create_scenario(scenario_id, nombre, geofence, capas, obstaculos)
 
 
-# Instancia global (singleton)
+
 _scenario_manager: Optional[ScenarioManager] = None
 
 
 def get_scenario_manager(base_dir: str = "escenarios") -> ScenarioManager:
-    """Obtiene la instancia del gestor de escenarios."""
+
     global _scenario_manager
     if _scenario_manager is None:
         _scenario_manager = ScenarioManager(base_dir)

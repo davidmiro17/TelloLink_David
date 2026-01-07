@@ -592,6 +592,14 @@ class MiniRemoteApp:
                         time.sleep(0.05)
                         continue
 
+                    if getattr(self, "_mission_running", False):
+                        time.sleep(0.1)
+                        continue
+
+                    if getattr(self.dron, "_goto_in_progress", False):
+                        time.sleep(0.1)
+                        continue
+
                     st = getattr(self.dron, "state", "")
                     if st == "flying":
                         last_rc_time = getattr(self, "_last_rc_sent", 0)
@@ -634,7 +642,9 @@ class MiniRemoteApp:
             self.wifi_var.set(f"{snr}" if isinstance(snr, int) else "—")
 
             pose = getattr(self.dron, "pose", None)
-            if pose is not None and h is not None and isinstance(h, (int, float)):
+            if (pose is not None and h is not None and isinstance(h, (int, float))
+                    and not getattr(self, "_mission_running", False)
+                    and not getattr(self.dron, "_goto_in_progress", False)):
                 pose.z_cm = float(h)
 
             if pose:
@@ -2317,8 +2327,15 @@ class MiniRemoteApp:
 
         # Exclusiones (polígonos)
         for i, p in enumerate(self._excl_polys):
-            pts = p["poly"]
-            if len(pts) >= 3:
+            pts = p.get("poly")
+            if not pts and "x1" in p and "y1" in p and "x2" in p and "y2" in p:
+                pts = [
+                    (p["x1"], p["y1"]),
+                    (p["x2"], p["y1"]),
+                    (p["x2"], p["y2"]),
+                    (p["x1"], p["y2"]),
+                ]
+            if pts and len(pts) >= 3:
                 canvas_pts = []
                 for (px, py) in pts:
                     canvas_pts.extend(self._world_to_canvas(px, py))
@@ -4080,6 +4097,7 @@ class MiniRemoteApp:
         self._mission_rect_points = []  # Puntos temporales para rectángulo
         self._mission_poly_points = []  # Puntos temporales para polígono
         self._mission_geofence = None  # Geofence propio
+        self._mission_template_name = None
         self._mission_running = False
         self._wp_selected_idx = None
         self._selected_obs_idx = None  # Índice del obstáculo seleccionado
@@ -5455,6 +5473,11 @@ class MiniRemoteApp:
 
         return result if result else [1, 2, 3]  # Si no hay datos, mostrar "todas"
 
+    def _get_mission_plan_id(self):
+        """Devuelve el nombre de plan para la galería de vuelos."""
+        plan_id = (self._mission_template_name or "").strip()
+        return plan_id if plan_id else "mission_editor"
+
     def _delete_last_obstacle(self):
         """Elimina el último obstáculo añadido."""
         if self._mission_exclusions:
@@ -5466,15 +5489,18 @@ class MiniRemoteApp:
         path = filedialog.asksaveasfilename(defaultextension=".json", filetypes=[("JSON", "*.json")])
         if not path:
             return
+        template_name = os.path.splitext(os.path.basename(path))[0] or "mission_editor"
 
         data = {
             "type": "mission",  # Identificador para distinguir del otro tipo
+            "name": template_name,
             "waypoints": self._mission_waypoints,
         }
 
         try:
             with open(path, "w") as f:
                 json.dump(data, f, indent=2)
+            self._mission_template_name = template_name
             messagebox.showinfo("Plantilla Misión", "Guardada correctamente.")
         except Exception as e:
             messagebox.showerror("Plantilla Misión", f"Error guardando: {e}")
@@ -5484,6 +5510,7 @@ class MiniRemoteApp:
         path = filedialog.askopenfilename(filetypes=[("JSON", "*.json")])
         if not path:
             return
+        template_name = os.path.splitext(os.path.basename(path))[0] or "mission_editor"
 
         try:
             with open(path, "r") as f:
@@ -5496,6 +5523,7 @@ class MiniRemoteApp:
                 return
 
             self._mission_waypoints = data.get("waypoints", [])
+            self._mission_template_name = data.get("name", template_name)
 
             # Actualizar UI
             try:
@@ -5646,22 +5674,33 @@ class MiniRemoteApp:
         # Cargar polígonos/rectángulos
         for p in obs.get('polygons', []):
             points = p.get('poly', [])
+            if not points and "x1" in p and "y1" in p and "x2" in p and "y2" in p:
+                points = [
+                    (p["x1"], p["y1"]),
+                    (p["x2"], p["y1"]),
+                    (p["x2"], p["y2"]),
+                    (p["x1"], p["y2"]),
+                ]
             obs_zmin = p.get('zmin', 0)
             obs_zmax = p.get('zmax', 60)
             nombre = p.get('nombre', '')
+            layers = p.get('layers')
 
             # Formato Editor de Misiones
             self._mission_exclusions.append({
                 'type': 'poly',
                 'points': points,
                 'zmin': obs_zmin, 'zmax': obs_zmax,
+                'layers': layers,
                 'nombre': nombre
             })
 
             # Formato Abrir Mapa
             self._excl_polys.append({
-                'points': points,
-                'zmin': obs_zmin, 'zmax': obs_zmax
+                'poly': points,
+                'zmin': obs_zmin,
+                'zmax': obs_zmax,
+                'layers': layers
             })
 
         # ─────────────────────────────────────────────────────────────────────
@@ -6302,7 +6341,7 @@ class MiniRemoteApp:
         # Registrar la sesión como misión aunque no haya escenario cargado
         if self._session_manager.is_session_active():
             self._session_manager._session_data["tipo"] = "plan"
-            self._session_manager._session_data["plan_id"] = "mission_editor"
+            self._session_manager._session_data["plan_id"] = self._get_mission_plan_id()
             if self._current_scenario_id:
                 self._session_manager._session_data["escenario_id"] = self._current_scenario_id
             self._session_manager._save_session_metadata()
@@ -6414,7 +6453,7 @@ class MiniRemoteApp:
             if self._current_scenario_id:
                 self._session_manager._session_data["escenario_id"] = self._current_scenario_id
                 self._session_manager._session_data["tipo"] = "plan"
-                self._session_manager._session_data["plan_id"] = "mission_editor"
+                self._session_manager._session_data["plan_id"] = self._get_mission_plan_id()
                 self._session_manager._save_session_metadata()
                 print(f"[Session] Escenario registrado: {self._current_scenario_id}")
 
@@ -6578,6 +6617,44 @@ class MiniRemoteApp:
 
                 except Exception as e:
                     print(f"[on_action] Error iniciando grabación continua: {e}")
+                    import traceback
+                    traceback.print_exc()
+            elif action_name == 'rotate':
+                try:
+                    rotate_deg = float(self._mission_waypoints[idx].get('rotate_deg', 0) or 0)
+                except Exception:
+                    rotate_deg = 0
+                if rotate_deg == 0:
+                    return
+                try:
+                    if rotate_deg >= 0:
+                        self.dron.cw(int(round(rotate_deg)))
+                    else:
+                        self.dron.ccw(int(round(abs(rotate_deg))))
+                    pose = getattr(self.dron, "pose", None)
+                    real_yaw = None
+                    try:
+                        if hasattr(self.dron, "get_yaw"):
+                            real_yaw = self.dron.get_yaw()
+                    except Exception:
+                        real_yaw = None
+                    commanded_yaw = None
+                    if real_yaw is not None:
+                        try:
+                            real_yaw = float(real_yaw)
+                            if real_yaw > 180:
+                                real_yaw = real_yaw - 360
+                            commanded_yaw = real_yaw
+                            if pose is not None:
+                                pose.set_heading_from_absolute_yaw(float(real_yaw))
+                        except Exception:
+                            pass
+                    if commanded_yaw is None and pose is not None:
+                        commanded_yaw = float(getattr(pose, "yaw_deg", 0.0) or 0.0)
+                    if commanded_yaw is not None:
+                        setattr(self.dron, "_commanded_yaw", commanded_yaw)
+                except Exception as e:
+                    print(f"[on_action] Error rotando: {e}")
                     import traceback
                     traceback.print_exc()
 

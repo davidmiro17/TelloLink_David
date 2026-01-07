@@ -21,14 +21,7 @@ class SessionManager:
     def start_session(self, escenario_id: Optional[str] = None,
                        plan_id: Optional[str] = None,
                        tipo: str = "manual") -> str:
-        """
-        Inicia una nueva sesión de vuelo.
 
-        Args:
-            escenario_id: ID del escenario (sala) donde se vuela
-            plan_id: ID del plan de vuelo (None si es vuelo manual)
-            tipo: "plan" o "manual"
-        """
         timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         session_path = os.path.join(self.base_dir, timestamp)
 
@@ -119,9 +112,7 @@ class SessionManager:
 
         return self._current_session is not None
 
-    # =========================================================================
-    # MÉTODOS PARA LA GALERÍA
-    # =========================================================================
+
 
     def list_sessions(self) -> List[Dict[str, Any]]:
 
@@ -237,17 +228,15 @@ class SessionManager:
             pass
         return False
 
-    # =========================================================================
-    # MÉTODOS PARA FILTRAR POR ESCENARIO/PLAN
-    # =========================================================================
+
 
     def list_sessions_by_scenario(self, escenario_id: str) -> List[Dict[str, Any]]:
-        """Lista sesiones filtradas por escenario."""
+
         all_sessions = self.list_sessions()
         return [s for s in all_sessions if s.get("escenario_id") == escenario_id]
 
     def list_sessions_by_plan(self, escenario_id: str, plan_id: str) -> List[Dict[str, Any]]:
-        """Lista sesiones de un plan de vuelo específico."""
+
         all_sessions = self.list_sessions()
         return [
             s for s in all_sessions
@@ -255,7 +244,7 @@ class SessionManager:
         ]
 
     def list_manual_sessions(self, escenario_id: str) -> List[Dict[str, Any]]:
-        """Lista sesiones de vuelo manual de un escenario."""
+
         all_sessions = self.list_sessions()
         return [
             s for s in all_sessions
@@ -263,7 +252,7 @@ class SessionManager:
         ]
 
     def get_scenario_stats(self, escenario_id: str) -> Dict[str, Any]:
-        """Obtiene estadísticas de un escenario."""
+
         sessions = self.list_sessions_by_scenario(escenario_id)
 
         total_photos = sum(s.get("photos_count", 0) for s in sessions)
@@ -282,9 +271,7 @@ class SessionManager:
         }
 
 
-# =============================================================================
-# FUNCIONES PARA MIGRAR ARCHIVOS ANTIGUOS
-# =============================================================================
+
 
 def migrate_legacy_files(captures_dir: str, videos_dir: str, sessions_dir: str) -> bool:
 
