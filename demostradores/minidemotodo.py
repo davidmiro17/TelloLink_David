@@ -5732,11 +5732,11 @@ class MiniRemoteApp:
         messagebox.showinfo("Escenario", f"Escenario '{scenario_name}' cargado.")
 
     def _apply_scenario_to_editor(self, scenario, scenario_id=None):
-        """Aplica un escenario al editor y sincroniza con el mapa."""
+
         self._apply_scenario(scenario, scenario_id=scenario_id, source="editor")
 
     def _load_scenario_from_file(self):
-        """Carga un escenario desde un archivo JSON."""
+
         path = filedialog.askopenfilename(
             initialdir=self._scenario_manager.base_dir,
             filetypes=[("Escenario JSON", "*.json")]
@@ -5754,7 +5754,7 @@ class MiniRemoteApp:
             messagebox.showerror("Escenario", f"Error cargando escenario: {e}")
 
     def _load_scenario_to_editor(self):
-        """Carga el escenario seleccionado al editor."""
+
         if not hasattr(self, '_scenario_list') or not self._scenario_list:
             messagebox.showwarning("Escenario", "No hay escenarios disponibles.")
             return
@@ -5774,12 +5774,9 @@ class MiniRemoteApp:
 
         self._apply_scenario_to_editor(scenario)
 
-    # =========================================================================
-    # MÉTODOS DE ESCENARIO PARA MAPA (modo RC)
-    # =========================================================================
 
     def _refresh_map_scenario_list(self):
-        """Refresca la lista de escenarios en ventana Mapa."""
+
         scenarios = self._scenario_manager.list_scenarios()
         names = []
         self._map_scenario_display_map = {}
@@ -5795,7 +5792,7 @@ class MiniRemoteApp:
                 self._map_scenario_combo_var.set(names[0])
 
     def _load_scenario_to_map(self):
-        """Carga escenario al mapa (modo RC)."""
+
         if not hasattr(self, '_map_scenario_list') or not self._map_scenario_list:
             messagebox.showwarning("Escenario", "No hay escenarios disponibles.")
             return
@@ -5816,11 +5813,11 @@ class MiniRemoteApp:
         self._apply_scenario_to_map(scenario)
 
     def _apply_scenario_to_map(self, scenario, scenario_id=None):
-        """Aplica un escenario al mapa y sincroniza con el editor."""
+
         self._apply_scenario(scenario, scenario_id=scenario_id, source="map")
 
     def _load_scenario_from_file_to_map(self):
-        """Carga un escenario desde archivo en la vista de mapa."""
+
         path = filedialog.askopenfilename(
             initialdir=self._scenario_manager.base_dir,
             filetypes=[("Escenario JSON", "*.json")]
@@ -5838,10 +5835,7 @@ class MiniRemoteApp:
             messagebox.showerror("Escenario", f"Error cargando escenario: {e}")
 
     def _build_scenario_data(self):
-        """
-        Construye los datos del escenario actual desde cualquiera de los formatos.
-        Unifica datos de Editor de Misiones y Abrir Mapa.
-        """
+
         # ─────────────────────────────────────────────────────────────────────
         # GEOFENCE
         # ─────────────────────────────────────────────────────────────────────
@@ -5957,17 +5951,17 @@ class MiniRemoteApp:
         return geofence, capas, obstaculos
 
     def _save_scenario_from_map(self):
-        """Guarda el estado actual del mapa como escenario."""
+
         parent = getattr(self, '_map_win', None) or self.root
         self._show_save_scenario_dialog(include_waypoints=False, parent=parent)
 
     def _save_scenario_from_editor(self):
-        """Guarda el estado actual del editor como escenario."""
+
         parent = getattr(self, '_mission_win', None) or self.root
         self._show_save_scenario_dialog(include_waypoints=True, parent=parent)
 
     def _show_save_scenario_dialog(self, include_waypoints=False, parent=None):
-        """Muestra diálogo para guardar escenario."""
+
         if parent is None:
             parent = self.root
 
@@ -6057,7 +6051,7 @@ class MiniRemoteApp:
         dialog.wait_window()
 
     def _mission_apply_geofence(self):
-        """Aplica el geofence configurado."""
+
         # Obtener valores
         zmin = int(self.gf_zmin_var.get() or 0)
         zmax = int(self.gf_zmax_var.get() or 200)
@@ -6080,7 +6074,7 @@ class MiniRemoteApp:
         self._draw_mission_map()
 
     def _update_wp_listbox(self):
-        """Actualiza la lista de waypoints."""
+
         self._wp_listbox.delete(0, tk.END)
         for i, wp in enumerate(self._mission_waypoints):
             actions = []
@@ -6100,7 +6094,7 @@ class MiniRemoteApp:
             self._wp_listbox.insert(tk.END, f"WP{i + 1}: ({wp['x']}, {wp['y']}, {wp['z']}) {action_str}")
 
     def _on_wp_select(self, event):
-        """Maneja selección de waypoint en la lista."""
+
         selection = self._wp_listbox.curselection()
         if not selection:
             # NO resetear _wp_selected_idx aquí, puede ser pérdida temporal de foco
@@ -6136,7 +6130,7 @@ class MiniRemoteApp:
         self._draw_mission_map()
 
     def _update_wp_actions(self):
-        """Actualiza las acciones del waypoint seleccionado."""
+
         if self._wp_selected_idx is None:
             return
 
@@ -6155,7 +6149,7 @@ class MiniRemoteApp:
         self._draw_mission_map()
 
     def _on_video_mode_change(self):
-        """Maneja cambios en los checkboxes de video con exclusión mutua."""
+
         # Si "Grabar Xs" está activo, desactivar start/stop
         if self._action_video.get():
             self._action_video_start.set(False)
@@ -6168,7 +6162,7 @@ class MiniRemoteApp:
         self._update_wp_actions()
 
     def _update_video_checkbox_states(self):
-        """Actualiza el estado visual de los checkboxes de video."""
+
         # Si "Grabar Xs" está activo, deshabilitar start/stop
         if self._action_video.get():
             self._cb_video_start.configure(state="disabled")
@@ -6188,7 +6182,7 @@ class MiniRemoteApp:
             self._cb_video_stop.configure(state="normal")
 
     def _apply_wp_coords(self):
-        """Aplica las coordenadas editadas al waypoint seleccionado."""
+
         if self._wp_selected_idx is None:
             print("[WP] No hay waypoint seleccionado")
             return
@@ -6243,7 +6237,7 @@ class MiniRemoteApp:
         print(f"[WP] Guardado OK")
 
     def _delete_selected_wp(self):
-        """Elimina el waypoint seleccionado."""
+
         if self._wp_selected_idx is not None:
             del self._mission_waypoints[self._wp_selected_idx]
             self._wp_selected_idx = None
@@ -6251,7 +6245,7 @@ class MiniRemoteApp:
             self._draw_mission_map()
 
     def _move_wp(self, direction):
-        """Mueve el waypoint seleccionado arriba/abajo."""
+
         if self._wp_selected_idx is None:
             return
         idx = self._wp_selected_idx
@@ -6265,7 +6259,7 @@ class MiniRemoteApp:
             self._draw_mission_map()
 
     def _clear_all_waypoints(self):
-        """Elimina todos los waypoints."""
+
         if messagebox.askyesno("Confirmar", "¿Eliminar todos los waypoints?"):
             self._mission_waypoints.clear()
             self._wp_selected_idx = None
@@ -6273,7 +6267,7 @@ class MiniRemoteApp:
             self._draw_mission_map()
 
     def _validate_mission_only(self):
-        """Valida la misión sin ejecutarla (no requiere dron conectado)."""
+
         if not self._mission_waypoints:
             messagebox.showwarning("Sin waypoints", "Añade al menos un waypoint", parent=self._mission_win)
             return
@@ -6300,7 +6294,7 @@ class MiniRemoteApp:
             self._mission_win.after(50, lambda d=detail: messagebox.showerror("Ruta Inválida", d, parent=self._mission_win))
 
     def _execute_mission(self):
-        """Ejecuta la misión planificada."""
+
         if not self._mission_waypoints:
             messagebox.showwarning("Sin waypoints", "Añade al menos un waypoint")
             return
@@ -6724,7 +6718,7 @@ class MiniRemoteApp:
         threading.Thread(target=run_in_thread, daemon=True).start()
 
     def _abort_mission(self):
-        """Abort la mision en ejecución."""
+
         if self._mission_running:
             self.dron.abort_mission()
             self._mission_running = False
