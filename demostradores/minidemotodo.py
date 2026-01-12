@@ -146,6 +146,7 @@ class MiniRemoteApp:
         self._fpv_running = False
         self._fpv_thread = None
         self._frame_lock = threading.Lock()
+        self._cv_cap_lock = threading.Lock()
         self._last_bgr = None
         self._last_frame_time = 0.0
         self._want_stream_on = False
@@ -953,7 +954,8 @@ class MiniRemoteApp:
         try:
             if self._cv_cap is not None and self._cv_cap.isOpened():
                 # Leer frame actual sin vaciar agresivamente el buffer (evita saltos/congelación)
-                ok, frame = self._cv_cap.read()
+                with self._cv_cap_lock:
+                    ok, frame = self._cv_cap.read()
                 if ok and isinstance(frame, np.ndarray) and frame.size > 0:
                     return frame
         except Exception:
@@ -1051,21 +1053,9 @@ class MiniRemoteApp:
                                 break
                     time.sleep(0.1)
                 else:
-                    # FPV no está actualizando - leer un frame directamente (una sola vez)
-                    print("[take_snapshot] FPV no actualiza, leyendo un frame directo...")
-                    if hasattr(self, '_cv_cap') and self._cv_cap is not None and self._cv_cap.isOpened():
-                        ret, new_frame = self._cv_cap.read()
-                        if ret and new_frame is not None:
-                            frame = new_frame
-                            print("[take_snapshot] Frame directo capturado")
-                        else:
-                            print("[take_snapshot] ERROR: No se pudo capturar frame")
-                            self._hud_show("Error: Sin video", 1.5)
-                            return False
-                    else:
-                        print("[take_snapshot] ERROR: Stream no disponible")
-                        self._hud_show("Error: Sin stream", 1.5)
-                        return False
+                    print("[take_snapshot] FPV no actualiza, sin frame disponible")
+                    self._hud_show("Error: Sin video", 1.5)
+                    return False
             else:
                 # FPV NO está corriendo - flush y capturar directamente
                 if hasattr(self, '_cv_cap') and self._cv_cap is not None and self._cv_cap.isOpened():
@@ -1073,7 +1063,8 @@ class MiniRemoteApp:
                     flush_start = time.monotonic()
                     flush_count = 0
                     while time.monotonic() - flush_start < 0.3:
-                        ret, _ = self._cv_cap.read()
+                        with self._cv_cap_lock:
+                            ret, _ = self._cv_cap.read()
                         if ret:
                             flush_count += 1
                         else:
@@ -1082,7 +1073,8 @@ class MiniRemoteApp:
 
                     # Ahora capturar el frame actual
                     for _ in range(10):
-                        ret, new_frame = self._cv_cap.read()
+                        with self._cv_cap_lock:
+                            ret, new_frame = self._cv_cap.read()
                         if ret and new_frame is not None:
                             frame = new_frame
                             print("[take_snapshot] Frame nuevo capturado correctamente")
@@ -1144,18 +1136,8 @@ class MiniRemoteApp:
         """Hilo dedicado para grabación de video, independiente del FPV visual."""
         print("[_recording_thread] Iniciando hilo de grabación")
 
-        # Determinar si FPV está corriendo - si es así, usamos sus frames
-        fpv_running = self._fpv_running or self._fpv_ext_running
-        print(f"[_recording_thread] FPV activo: {fpv_running}")
-
-        if fpv_running:
-            # FPV está corriendo - usar frames de _last_bgr (no competir por el stream)
-            print("[_recording_thread] Modo FPV: usando frames del buffer compartido")
-            self._recording_from_fpv_buffer()
-        else:
-            # FPV no está corriendo - leer directamente del stream
-            print("[_recording_thread] Modo directo: leyendo del stream")
-            self._recording_from_stream()
+        print("[_recording_thread] Modo directo: leyendo del stream")
+        self._recording_from_stream()
 
     def _recording_from_fpv_buffer(self):
         """Graba usando frames del buffer _last_bgr (cuando FPV está activo)."""
@@ -1237,7 +1219,8 @@ class MiniRemoteApp:
         flush_start = time.monotonic()
         if hasattr(self, '_cv_cap') and self._cv_cap is not None and self._cv_cap.isOpened():
             while time.monotonic() - flush_start < 0.5:
-                ret, _ = self._cv_cap.read()
+                with self._cv_cap_lock:
+                    ret, _ = self._cv_cap.read()
                 if ret:
                     flush_count += 1
                 else:
@@ -1258,7 +1241,8 @@ class MiniRemoteApp:
 
                 # Leer frame del stream
                 if hasattr(self, '_cv_cap') and self._cv_cap is not None and self._cv_cap.isOpened():
-                    ret, direct_frame = self._cv_cap.read()
+                    with self._cv_cap_lock:
+                        ret, direct_frame = self._cv_cap.read()
                     if ret and direct_frame is not None:
                         frame = direct_frame
                         with self._frame_lock:
@@ -1323,6 +1307,8 @@ class MiniRemoteApp:
         self._rec_last_good_frame = None
         self._rec_force_direct = False
         self._fpv_record_enabled = bool(self._fpv_running)
+        self._rec_fps = 30
+        self._rec_start_mono = time.monotonic()
         if expected_duration is not None:
             try:
                 self._rec_expected_frames = max(0, int(round(float(expected_duration) * self._rec_fps)))
@@ -1352,8 +1338,13 @@ class MiniRemoteApp:
         max_wait = 50  # 5 segundos máximo
         frame_found = False
         for i in range(max_wait):
-            with self._frame_lock:
-                if self._last_bgr is not None:
+            if hasattr(self, '_cv_cap') and self._cv_cap is not None and self._cv_cap.isOpened():
+                with self._cv_cap_lock:
+                    ret, new_frame = self._cv_cap.read()
+                if ret and new_frame is not None:
+                    with self._frame_lock:
+                        self._last_bgr = new_frame
+                        self._last_frame_time = time.monotonic()
                     print(f"[_start_recording] Frame disponible después de {i*0.1:.1f}s")
                     frame_found = True
                     break
@@ -1367,8 +1358,13 @@ class MiniRemoteApp:
         # Iniciar el flag de grabación
         self._rec_running = True
 
-        # Usar hilo dedicado si se fuerza O si no hay FPV activo
-        use_dedicated = force_dedicated_thread or (not self._fpv_running and not self._fpv_ext_running)
+        # Usar hilo dedicado siempre para mantener cadencia estable
+        use_dedicated = True
+        if use_dedicated:
+            self._fpv_record_enabled = False
+            self._rec_force_direct = True
+            if self._fpv_ext_running:
+                self.stop_fpv_external()
 
         if use_dedicated:
             self._rec_thread = threading.Thread(target=self._recording_thread_func, daemon=True)
@@ -1394,11 +1390,14 @@ class MiniRemoteApp:
             video_path = self._rec_path
             try:
                 if self._rec_writer is not None and self._rec_writer.isOpened():
-                    # No rellenamos frames duplicados - causa videos "lentos"
-                    # Solo informamos si hubo menos frames de los esperados
-                    if self._rec_expected_frames and self._rec_frame_count < self._rec_expected_frames:
-                        missing = self._rec_expected_frames - self._rec_frame_count
-                        print(f"[_stop_recording] INFO: {missing} frames menos de los esperados (sin relleno)")
+                    elapsed = max(0.0, time.monotonic() - (self._rec_start_mono or time.monotonic()))
+                    expected = int(round(elapsed * float(self._rec_fps or 30)))
+                    if expected > self._rec_frame_count and self._rec_last_good_frame is not None:
+                        missing = expected - self._rec_frame_count
+                        print(f"[_stop_recording] Rellenando {missing} frames para ajustar duración")
+                        for _ in range(missing):
+                            self._rec_writer.write(self._rec_last_good_frame)
+                        self._rec_frame_count = expected
                     frames_recorded = self._rec_frame_count
                     print(f"[_stop_recording] Liberando writer, guardando video en {video_path}")
                     print(f"[_stop_recording] Total frames escritos: {frames_recorded}")
@@ -1438,6 +1437,7 @@ class MiniRemoteApp:
                 self._hud_show("Error grabación", 1.5)
 
             self._rec_writer = None
+            self._rec_force_direct = False
 
     # FPV EXTERNO (cv2.imshow con VideoCapture compartido)
     def toggle_fpv_external(self):
@@ -1501,14 +1501,15 @@ class MiniRemoteApp:
 
             try:
                 if self._cv_cap is not None and self._cv_cap.isOpened():
-                    ok, frame = self._cv_cap.read()
+                    with self._cv_cap_lock:
+                        ok, frame = self._cv_cap.read()
                     if ok and frame is not None:
                         # Guardar para snapshots
                         with self._frame_lock:
                             self._last_bgr = frame.copy()
 
-                        # Grabación (en el mismo hilo para evitar conflictos FFmpeg)
-                        if self._rec_running:
+                        # Grabación (solo si no hay hilo dedicado activo)
+                        if self._rec_running and self._rec_thread is None:
                             if self._rec_writer is None:
                                 h, w = frame.shape[:2]
                                 self._start_writer((w, h))
