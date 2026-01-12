@@ -1143,11 +1143,14 @@ class MiniRemoteApp:
         """Graba usando frames del buffer _last_bgr (cuando FPV está activo)."""
         frames_sin_datos = 0
         last_log_time = time.time()
-        target_fps = self._rec_fps
-        frame_interval = 1.0 / target_fps
-        next_frame_time = time.monotonic()
         last_written_time = 0
         first_frame_logged = False
+
+        # Variables para medir FPS reales del stream
+        fps_measure_frames = []  # Lista de timestamps de frames recibidos
+        fps_measured = False
+        measured_fps = 25.0  # Valor por defecto más realista para Tello
+        recording_start_time = time.monotonic()
 
         while self._rec_running:
             try:
@@ -1167,23 +1170,43 @@ class MiniRemoteApp:
                     if not first_frame_logged:
                         print(f"[_recording_thread] Primer frame del buffer FPV: {frame.shape}")
                         first_frame_logged = True
+                        recording_start_time = time.monotonic()
 
-                    # Crear writer si no existe
-                    if self._rec_writer is None:
+                    # Medir FPS reales durante el primer segundo
+                    if not fps_measured:
+                        fps_measure_frames.append(time.monotonic())
+                        elapsed_measure = fps_measure_frames[-1] - fps_measure_frames[0]
+                        if elapsed_measure >= 1.0 and len(fps_measure_frames) >= 5:
+                            # Calcular FPS reales
+                            measured_fps = (len(fps_measure_frames) - 1) / elapsed_measure
+                            # Limitar a rango razonable (15-35 FPS)
+                            measured_fps = max(15.0, min(35.0, measured_fps))
+                            self._rec_fps = measured_fps
+                            print(f"[_recording_thread] FPS medidos del buffer FPV: {measured_fps:.1f}")
+                            fps_measured = True
+                            fps_measure_frames = []  # Liberar memoria
+
+                    # Crear writer si no existe (después de medir FPS o tras 1.5s)
+                    elapsed_total = time.monotonic() - recording_start_time
+                    if self._rec_writer is None and (fps_measured or elapsed_total > 1.5):
+                        if not fps_measured:
+                            # Timeout, usar valor por defecto
+                            print(f"[_recording_thread] Timeout midiendo FPS, usando {measured_fps:.1f}")
+                            self._rec_fps = measured_fps
+                            fps_measured = True
                         h, w = frame.shape[:2]
-                        print(f"[_recording_thread] Creando writer con tamaño {w}x{h}")
+                        print(f"[_recording_thread] Creando writer con tamaño {w}x{h}, FPS={self._rec_fps:.1f}")
                         self._start_writer((w, h))
 
-                    # Escribir frame (limitado a target_fps)
-                    now = time.monotonic()
-                    if now >= next_frame_time and self._rec_writer is not None:
+                    # Escribir cada frame nuevo que llega (sin limitación artificial)
+                    if self._rec_writer is not None:
                         self._rec_writer.write(frame)
                         self._rec_frame_count += 1
-                        next_frame_time += frame_interval
 
                         # Log cada ~1 segundo
                         if time.time() - last_log_time >= 1.0:
-                            print(f"[_recording_thread] Frames grabados: {self._rec_frame_count}")
+                            actual_fps = self._rec_frame_count / max(0.1, time.monotonic() - recording_start_time)
+                            print(f"[_recording_thread] Frames: {self._rec_frame_count}, FPS actual: {actual_fps:.1f}")
                             last_log_time = time.time()
                 else:
                     frames_sin_datos += 1
@@ -1229,11 +1252,14 @@ class MiniRemoteApp:
 
         frames_sin_datos = 0
         last_log_time = time.time()
-        target_fps = self._rec_fps
-        frame_interval = 1.0 / target_fps
-        next_frame_time = time.monotonic()
         last_good_frame = None
         first_frame_logged = False
+
+        # Variables para medir FPS reales del stream
+        fps_measure_frames = []  # Lista de timestamps de frames recibidos
+        fps_measured = False
+        measured_fps = 25.0  # Valor por defecto más realista para Tello
+        recording_start_time = time.monotonic()
 
         while self._rec_running:
             try:
@@ -1245,13 +1271,15 @@ class MiniRemoteApp:
                         ret, direct_frame = self._cv_cap.read()
                     if ret and direct_frame is not None:
                         frame = direct_frame
+                        frame_time = time.monotonic()
                         with self._frame_lock:
                             self._last_bgr = frame
                             self._rec_last_good_frame = frame
-                            self._last_frame_time = time.monotonic()
+                            self._last_frame_time = frame_time
                         if not first_frame_logged:
                             print(f"[_recording_thread] Primer frame recibido: {frame.shape}")
                             first_frame_logged = True
+                            recording_start_time = frame_time
                     else:
                         if frames_sin_datos == 0:
                             print(f"[_recording_thread] cv_cap.read() falló: ret={ret}")
@@ -1261,28 +1289,44 @@ class MiniRemoteApp:
                     last_good_frame = frame
                     self._rec_last_good_frame = frame
 
-                    # Crear writer si no existe
-                    if self._rec_writer is None:
+                    # Medir FPS reales durante el primer segundo
+                    if not fps_measured:
+                        fps_measure_frames.append(time.monotonic())
+                        elapsed_measure = fps_measure_frames[-1] - fps_measure_frames[0]
+                        if elapsed_measure >= 1.0 and len(fps_measure_frames) >= 5:
+                            # Calcular FPS reales
+                            measured_fps = (len(fps_measure_frames) - 1) / elapsed_measure
+                            # Limitar a rango razonable (15-35 FPS)
+                            measured_fps = max(15.0, min(35.0, measured_fps))
+                            self._rec_fps = measured_fps
+                            print(f"[_recording_thread] FPS medidos del stream: {measured_fps:.1f}")
+                            fps_measured = True
+                            fps_measure_frames = []  # Liberar memoria
+
+                    # Crear writer si no existe (después de medir FPS o tras 1.5s)
+                    elapsed_total = time.monotonic() - recording_start_time
+                    if self._rec_writer is None and (fps_measured or elapsed_total > 1.5):
+                        if not fps_measured:
+                            # Timeout, usar valor por defecto
+                            print(f"[_recording_thread] Timeout midiendo FPS, usando {measured_fps:.1f}")
+                            self._rec_fps = measured_fps
+                            fps_measured = True
                         h, w = frame.shape[:2]
-                        print(f"[_recording_thread] Creando writer con tamaño {w}x{h}")
+                        print(f"[_recording_thread] Creando writer con tamaño {w}x{h}, FPS={self._rec_fps:.1f}")
                         self._start_writer((w, h))
 
-                # Escribir frame (limitado a target_fps)
-                now = time.monotonic()
-                if now >= next_frame_time:
-                    if self._rec_writer is not None and last_good_frame is not None:
-                        self._rec_writer.write(last_good_frame)
+                    # Escribir cada frame que llega (sin limitación artificial)
+                    # El stream ya viene a la velocidad del drone
+                    if self._rec_writer is not None:
+                        self._rec_writer.write(frame)
                         self._rec_frame_count += 1
-                        next_frame_time += frame_interval
 
                         # Log cada ~1 segundo
                         if time.time() - last_log_time >= 1.0:
-                            print(f"[_recording_thread] Frames grabados: {self._rec_frame_count}")
+                            actual_fps = self._rec_frame_count / max(0.1, time.monotonic() - recording_start_time)
+                            print(f"[_recording_thread] Frames: {self._rec_frame_count}, FPS actual: {actual_fps:.1f}")
                             last_log_time = time.time()
                 else:
-                    time.sleep(0.005)
-
-                if frame is None:
                     frames_sin_datos += 1
                     if frames_sin_datos == 30:
                         print("[_recording_thread] WARNING: 30 lecturas sin frames")
@@ -1390,17 +1434,11 @@ class MiniRemoteApp:
             video_path = self._rec_path
             try:
                 if self._rec_writer is not None and self._rec_writer.isOpened():
-                    elapsed = max(0.0, time.monotonic() - (self._rec_start_mono or time.monotonic()))
-                    expected = int(round(elapsed * float(self._rec_fps or 30)))
-                    if expected > self._rec_frame_count and self._rec_last_good_frame is not None:
-                        missing = expected - self._rec_frame_count
-                        print(f"[_stop_recording] Rellenando {missing} frames para ajustar duración")
-                        for _ in range(missing):
-                            self._rec_writer.write(self._rec_last_good_frame)
-                        self._rec_frame_count = expected
                     frames_recorded = self._rec_frame_count
+                    elapsed = max(0.1, time.monotonic() - (self._rec_start_mono or time.monotonic()))
+                    actual_fps = frames_recorded / elapsed
                     print(f"[_stop_recording] Liberando writer, guardando video en {video_path}")
-                    print(f"[_stop_recording] Total frames escritos: {frames_recorded}")
+                    print(f"[_stop_recording] Total frames: {frames_recorded}, Duración: {elapsed:.1f}s, FPS real: {actual_fps:.1f}")
                     self._rec_writer.release()
 
                     # Verificar que el video no está vacío
