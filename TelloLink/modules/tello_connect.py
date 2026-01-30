@@ -83,14 +83,7 @@ def _require_connected(self):
 
 
 def _send(self, cmd: str, timeout: float = None) -> str:
-    """
-    Envía un comando al dron con timeout dinámico.
 
-    Args:
-        cmd: Comando a enviar
-        timeout: Timeout en segundos. Si es None, usa el default.
-                 Comandos largos (go, curve) pueden necesitar hasta 60s.
-    """
     _require_connected(self)
 
     # Guardar timeout original

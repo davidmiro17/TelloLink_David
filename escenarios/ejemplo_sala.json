@@ -55,8 +55,7 @@
         {"x": 100, "y": 0, "z": 80, "photo": true},
         {"x": 100, "y": 100, "z": 80, "photo": true, "video": true, "video_sec": 5},
         {"x": 0, "y": 100, "z": 80, "photo": true}
-      ],
-      "return_home": true
+      ]
     }
   ]
 }

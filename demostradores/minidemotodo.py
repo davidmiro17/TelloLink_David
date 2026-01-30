@@ -88,6 +88,7 @@ class MiniRemoteApp:
         self.bat_var = tk.StringVar(value="—")
         self.h_var = tk.StringVar(value="0 cm")
         self.wifi_var = tk.StringVar(value="—")
+        self.temp_var = tk.StringVar(value="—")
 
         self._telemetry_running = False
         self._ui_landing = False
@@ -117,6 +118,7 @@ class MiniRemoteApp:
         self._incl_zmax_var = None
         self._excl_circles = []
         self._excl_polys = []
+        self._mission_exclusions = []  # Sincronizado con _excl_circles y _excl_polys
         self._draw_layer_var = None
 
         # Sistema de capas
@@ -266,6 +268,8 @@ class MiniRemoteApp:
         tk.Label(top, textvariable=self.h_var, width=7).grid(row=0, column=5, sticky="w")
         tk.Label(top, text="WiFi:").grid(row=0, column=6, sticky="e")
         tk.Label(top, textvariable=self.wifi_var, width=6).grid(row=0, column=7, sticky="w")
+        tk.Label(top, text="Temp:").grid(row=0, column=8, sticky="e")
+        tk.Label(top, textvariable=self.temp_var, width=6).grid(row=0, column=9, sticky="w")
 
         # Conexión
         conn = tk.Frame(self.root, bd=1, relief="groove")
@@ -280,8 +284,9 @@ class MiniRemoteApp:
         # Vuelo
         flight = tk.Frame(self.root, bd=1, relief="groove")
         flight.pack(fill="x", **pad)
-        tk.Button(flight, text="Despegar (Enter)", width=16, command=self.on_takeoff,
-                  bg="#90ee90", font=("Arial", 10, "bold")).grid(row=0, column=0, **pad)
+        self._btn_takeoff = tk.Button(flight, text="Despegar (Enter)", width=16, command=self.on_takeoff,
+                  bg="#90ee90", font=("Arial", 10, "bold"))
+        self._btn_takeoff.grid(row=0, column=0, **pad)
         tk.Button(flight, text="Aterrizar (Espacio)", width=16, command=self.on_land,
                   bg="#ff6961", font=("Arial", 10, "bold")).grid(row=0, column=1, **pad)
         tk.Label(flight, textvariable=self._rec_badge_var, fg="#d00", font=("Arial", 10, "bold")).grid(row=0, column=2,
@@ -391,6 +396,8 @@ class MiniRemoteApp:
                   bg="#DDA0DD", font=("Arial", 10, "bold"), padx=20, pady=5).pack(side="left", padx=4)
         tk.Button(btn_container, text="📋 Editor de Misiones", command=self.open_mission_window,
                   bg="#98D8C8", font=("Arial", 10, "bold"), padx=20, pady=5).pack(side="left", padx=4)
+        tk.Button(btn_container, text="🗑 Reset Total", command=self._emergency_reset,
+                  bg="#dc3545", fg="white", font=("Arial", 10, "bold"), padx=15, pady=5).pack(side="left", padx=4)
 
         # Nota compacta
         note = tk.Label(self.root, fg="#555", font=("Arial", 8),
@@ -453,6 +460,7 @@ class MiniRemoteApp:
             self.bat_var.set("—")
             self.h_var.set("0 cm")
             self.wifi_var.set("—")
+            self.temp_var.set("—")
             try:
                 if self._map_win and tk.Toplevel.winfo_exists(self._map_win):
                     self._map_win.destroy()
@@ -469,22 +477,35 @@ class MiniRemoteApp:
         if isinstance(bat, int) and bat < BAT_MIN_SAFE:
             if not messagebox.askokcancel("Batería baja", f"Batería {bat}%. ¿Despegar?"):
                 return
+
+        # Callback que se ejecuta cuando el despegue termina
+        def on_takeoff_complete(success):
+            # Usamos root.after para actualizar la UI desde el hilo principal
+            def update_ui():
+                if success:
+                    self._btn_takeoff.configure(bg="#28a745")  # Verde: despegue completado
+                    self._ensure_pose_origin()
+                    self._restart_gf_monitor(force=True)
+                    try:
+                        self._reapply_exclusions_to_backend()
+                    except Exception:
+                        pass
+                    self._hud_show("Despegado", 1.5)
+                else:
+                    self._btn_takeoff.configure(bg="#90ee90")  # Restaurar color original
+                    messagebox.showerror("TakeOff", "No se pudo despegar.")
+                self._resume_keepalive()
+            self.root.after(0, update_ui)
+
         try:
             self._pause_keepalive()
-            ok = self.dron.takeOff(0.5, blocking=False)
-            if not ok:
-                messagebox.showerror("TakeOff", "No se pudo despegar.")
-            else:
-                self._ensure_pose_origin()
-                self._restart_gf_monitor(force=True)
-                try:
-                    self._reapply_exclusions_to_backend()
-                except Exception:
-                    pass
-                self._hud_show("Despegado", 1.5)
+            # Cambiar botón a amarillo mientras despega
+            self._btn_takeoff.configure(bg="#ffcc00")
+            # Llamada no bloqueante con callback
+            self.dron.takeOff(0.5, blocking=False, callback=on_takeoff_complete)
         except Exception as e:
+            self._btn_takeoff.configure(bg="#90ee90")  # Restaurar color
             messagebox.showerror("TakeOff", str(e))
-        finally:
             self.root.after(200, self._resume_keepalive)
 
     def on_land(self):
@@ -526,6 +547,84 @@ class MiniRemoteApp:
                 self.root.destroy()
             except Exception:
                 pass
+
+    def _emergency_reset(self):
+        """Borra todos los medios, planes de vuelo y escenarios (reset de emergencia)."""
+        # Primera confirmación
+        resp1 = messagebox.askyesno(
+            "Reset Total",
+            "¿Estás seguro de que quieres BORRAR TODO?\n\n"
+            "- Todas las fotos y videos\n"
+            "- Todos los planes de vuelo\n"
+            "- Todos los escenarios\n\n"
+            "Esta acción NO se puede deshacer.",
+            icon="warning"
+        )
+        if not resp1:
+            return
+
+        # Segunda confirmación (doble seguridad)
+        resp2 = messagebox.askyesno(
+            "Confirmar Reset Total",
+            "ÚLTIMA ADVERTENCIA\n\n"
+            "Todos los datos serán eliminados permanentemente.\n\n"
+            "¿Confirmas el borrado total?",
+            icon="warning"
+        )
+        if not resp2:
+            return
+
+        deleted_sessions = 0
+        deleted_scenarios = 0
+        errors = []
+
+        # Borrar sesiones (fotos y videos)
+        try:
+            if os.path.exists(self._sessions_dir):
+                for item in os.listdir(self._sessions_dir):
+                    item_path = os.path.join(self._sessions_dir, item)
+                    try:
+                        if os.path.isdir(item_path):
+                            shutil.rmtree(item_path)
+                        else:
+                            os.remove(item_path)
+                        deleted_sessions += 1
+                    except Exception as e:
+                        errors.append(f"Sesión {item}: {e}")
+        except Exception as e:
+            errors.append(f"Error accediendo sesiones: {e}")
+
+        # Borrar escenarios (incluye planes de vuelo)
+        try:
+            escenarios_dir = self._scenario_manager.base_dir
+            if os.path.exists(escenarios_dir):
+                for item in os.listdir(escenarios_dir):
+                    if item.endswith('.json'):
+                        item_path = os.path.join(escenarios_dir, item)
+                        try:
+                            os.remove(item_path)
+                            deleted_scenarios += 1
+                        except Exception as e:
+                            errors.append(f"Escenario {item}: {e}")
+        except Exception as e:
+            errors.append(f"Error accediendo escenarios: {e}")
+
+        # Mostrar resultado
+        if errors:
+            messagebox.showwarning(
+                "Reset Parcial",
+                f"Reset completado con errores:\n"
+                f"- Sesiones borradas: {deleted_sessions}\n"
+                f"- Escenarios borrados: {deleted_scenarios}\n\n"
+                f"Errores:\n" + "\n".join(errors[:5])
+            )
+        else:
+            messagebox.showinfo(
+                "Reset Completado",
+                f"Todos los datos han sido eliminados:\n"
+                f"- Sesiones borradas: {deleted_sessions}\n"
+                f"- Escenarios borrados: {deleted_scenarios}"
+            )
 
     def apply_speed(self):
         try:
@@ -635,12 +734,14 @@ class MiniRemoteApp:
         try:
             bat = getattr(self.dron, "battery_pct", None)
             h = getattr(self.dron, "height_cm", None)
-            snr = getattr(self.dron, "wifi_snr", None)
+            snr = getattr(self.dron, "wifi", None)
+            temp = getattr(self.dron, "temp_c", None)
             st = getattr(self.dron, "state", "disconnected")
             self.state_var.set(st)
             self.bat_var.set(f"{bat}%" if isinstance(bat, int) else "—")
             self.h_var.set(f"{h} cm" if isinstance(h, (int, float)) else "0 cm")
             self.wifi_var.set(f"{snr}" if isinstance(snr, int) else "—")
+            self.temp_var.set(f"{int(temp)}°C" if temp is not None else "—")
 
             pose = getattr(self.dron, "pose", None)
             if (pose is not None and h is not None and isinstance(h, (int, float))
@@ -1031,65 +1132,42 @@ class MiniRemoteApp:
             frame_age = time.monotonic() - self._last_frame_time if self._last_frame_time > 0 else float('inf')
 
         # Verificar que el frame existe y es reciente (< 3 segundos)
-        if frame is None:
-            self._hud_show("Sin frame", 1.5)
-            print("[take_snapshot] ERROR: No hay frame disponible")
-            return False
+        if frame is None or frame_age > 3.0:
+            print(f"[take_snapshot] Frame no disponible o antiguo ({frame_age:.1f}s), capturando del stream...")
 
-        if frame_age > 3.0:
-            print(f"[take_snapshot] WARNING: Frame antiguo ({frame_age:.1f}s), intentando capturar uno nuevo...")
-            fpv_running = self._fpv_running or self._fpv_ext_running
-
-            if fpv_running:
-                # FPV está corriendo - esperar a que actualice el buffer (NO competir por stream)
-                print("[take_snapshot] FPV activo - esperando frame nuevo del buffer...")
-                start_wait = time.monotonic()
-                for _ in range(30):  # Máximo 3 segundos
-                    with self._frame_lock:
-                        if self._last_frame_time > start_wait:
-                            frame = self._last_bgr.copy() if self._last_bgr is not None else None
-                            if frame is not None:
-                                print("[take_snapshot] Frame nuevo del buffer FPV obtenido")
-                                break
-                    time.sleep(0.1)
-                else:
-                    print("[take_snapshot] FPV no actualiza, sin frame disponible")
-                    self._hud_show("Error: Sin video", 1.5)
-                    return False
-            else:
-                # FPV NO está corriendo - flush y capturar directamente
-                if hasattr(self, '_cv_cap') and self._cv_cap is not None and self._cv_cap.isOpened():
-                    print("[take_snapshot] Flushing buffer de frames antiguos...")
-                    flush_start = time.monotonic()
-                    flush_count = 0
-                    while time.monotonic() - flush_start < 0.3:
-                        with self._cv_cap_lock:
+            # Intentar leer directamente del stream (con lock para evitar race condition)
+            if hasattr(self, '_cv_cap') and self._cv_cap is not None and self._cv_cap.isOpened():
+                with self._cv_cap_lock:
+                    # Flush frames antiguos
+                    for _ in range(15):
+                        try:
                             ret, _ = self._cv_cap.read()
-                        if ret:
-                            flush_count += 1
-                        else:
-                            time.sleep(0.01)
-                    print(f"[take_snapshot] Flushed {flush_count} frames")
-
-                    # Ahora capturar el frame actual
-                    for _ in range(10):
-                        with self._cv_cap_lock:
-                            ret, new_frame = self._cv_cap.read()
-                        if ret and new_frame is not None:
-                            frame = new_frame
-                            print("[take_snapshot] Frame nuevo capturado correctamente")
+                            if not ret:
+                                break
+                        except:
                             break
-                        time.sleep(0.1)
+
+                    # Capturar frame actual
+                    for attempt in range(10):
+                        try:
+                            ret, new_frame = self._cv_cap.read()
+                            if ret and new_frame is not None:
+                                frame = new_frame
+                                print(f"[take_snapshot] Frame capturado del stream (intento {attempt+1})")
+                                break
+                        except Exception as e:
+                            print(f"[take_snapshot] Error: {e}")
+                        time.sleep(0.05)
                     else:
-                        print("[take_snapshot] ERROR: No se pudo capturar frame nuevo")
+                        print("[take_snapshot] ERROR: No se pudo capturar frame")
                         self._hud_show("Error: Sin video", 1.5)
                         return False
-                else:
-                    print("[take_snapshot] ERROR: Stream no disponible")
-                    self._hud_show("Error: Sin stream", 1.5)
-                    return False
+            else:
+                print("[take_snapshot] ERROR: Stream no disponible")
+                self._hud_show("Error: Sin stream", 1.5)
+                return False
 
-        # Usar gestor de sesiones para obtener ruta
+        # Guardar foto
         path = self._session_manager.get_photo_path()
         try:
             cv2.imwrite(path, frame)
@@ -1407,8 +1485,7 @@ class MiniRemoteApp:
         if use_dedicated:
             self._fpv_record_enabled = False
             self._rec_force_direct = True
-            if self._fpv_ext_running:
-                self.stop_fpv_external()
+            # NO cerrar FPV - dejar que siga mostrando video mientras graba
 
         if use_dedicated:
             self._rec_thread = threading.Thread(target=self._recording_thread_func, daemon=True)
@@ -2236,27 +2313,6 @@ class MiniRemoteApp:
                   bg="#28a745", fg="white", font=("Arial", 8, "bold"), bd=0,
                   activebackground="#218838", cursor="hand2").pack(fill="x", padx=2, pady=(6, 4))
 
-        # ═══════════════════════════════════════════════════════
-        # SECCIÓN: PLANTILLAS (al final)
-        # ═══════════════════════════════════════════════════════
-        card_plantillas = tk.Frame(side_panel, bg=BG_CARD, bd=1, relief="solid")
-        card_plantillas.pack(fill="x", padx=4, pady=4)
-
-        tk.Label(card_plantillas, text="  PLANTILLAS", font=("Arial", 9, "bold"),
-                 bg=BG_HEADER, fg=FG_HEADER, anchor="w").pack(fill="x", ipady=4)
-
-        content_plantillas = tk.Frame(card_plantillas, bg=BG_CARD)
-        content_plantillas.pack(fill="x", padx=8, pady=8)
-
-        btn_frame_plantillas = tk.Frame(content_plantillas, bg=BG_CARD)
-        btn_frame_plantillas.pack(fill="x")
-        tk.Button(btn_frame_plantillas, text="💾 Guardar", command=self._save_template,
-                  bg="#28a745", fg="white", font=("Arial", 8), bd=0,
-                  activebackground="#218838").pack(side="left", fill="x", expand=True, padx=2)
-        tk.Button(btn_frame_plantillas, text="📂 Cargar", command=self._load_template,
-                  bg="#17a2b8", fg="white", font=("Arial", 8), bd=0,
-                  activebackground="#138496").pack(side="left", fill="x", expand=True, padx=2)
-
         self.map_canvas.bind("<Button-1>", self._on_map_click)
 
         # Indicador de capa actual (esquina superior izquierda del canvas)
@@ -2655,7 +2711,14 @@ class MiniRemoteApp:
         zmin, zmax = self._get_layer_z_range()
         selected_layers = self._get_selected_layers()
 
+        # Añadir a AMBAS listas para mantener sincronización
         self._excl_circles.append({"cx": wx, "cy": wy, "r": r, "zmin": zmin, "zmax": zmax, "layers": selected_layers})
+        self._mission_exclusions.append({
+            'type': 'circle',
+            'cx': wx, 'cy': wy, 'r': r,
+            'zmin': zmin, 'zmax': zmax,
+            'layers': selected_layers
+        })
 
         try:
             if hasattr(self.dron, "add_exclusion_circle"):
@@ -2674,10 +2737,12 @@ class MiniRemoteApp:
 
     def _add_rectangle_point(self, wx, wy):
         """Añade un punto para dibujar un rectángulo (2 clics: esquinas opuestas)."""
+        print(f"[DEBUG] _add_rectangle_point llamado: ({wx}, {wy})")
         if not hasattr(self, '_rect_points'):
             self._rect_points = []
 
         self._rect_points.append((wx, wy))
+        print(f"[DEBUG] _rect_points ahora tiene {len(self._rect_points)} puntos")
         cx_px, cy_px = self._world_to_canvas(wx, wy)
 
         # Mostrar punto temporal
@@ -2697,7 +2762,16 @@ class MiniRemoteApp:
 
             # Crear polígono rectangular (4 esquinas)
             rect_poly = [(x1, y1), (x2, y1), (x2, y2), (x1, y2)]
+
+            # Añadir a AMBAS listas para mantener sincronización
             self._excl_polys.append({"poly": rect_poly, "zmin": zmin, "zmax": zmax, "layers": selected_layers})
+            self._mission_exclusions.append({
+                'type': 'poly',
+                'points': rect_poly,
+                'zmin': zmin, 'zmax': zmax,
+                'layers': selected_layers
+            })
+            print(f"[DEBUG] Rectángulo añadido. _excl_polys: {len(self._excl_polys)}, _mission_exclusions: {len(self._mission_exclusions)}")
 
             try:
                 if hasattr(self.dron, "add_exclusion_poly"):
@@ -2727,6 +2801,7 @@ class MiniRemoteApp:
         )
 
     def _close_polygon(self):
+        print(f"[DEBUG] _close_polygon llamado. Puntos: {len(self._poly_points)}")
 
         if len(self._poly_points) < 3:
             messagebox.showwarning("Polígono", "Necesitas al menos 3 puntos.")
@@ -2736,7 +2811,17 @@ class MiniRemoteApp:
         zmin, zmax = self._get_layer_z_range()
         selected_layers = self._get_selected_layers()
 
-        self._excl_polys.append({"poly": list(self._poly_points), "zmin": zmin, "zmax": zmax, "layers": selected_layers})
+        poly_points_copy = list(self._poly_points)
+
+        # Añadir a AMBAS listas para mantener sincronización
+        self._excl_polys.append({"poly": poly_points_copy, "zmin": zmin, "zmax": zmax, "layers": selected_layers})
+        self._mission_exclusions.append({
+            'type': 'poly',
+            'points': poly_points_copy,
+            'zmin': zmin, 'zmax': zmax,
+            'layers': selected_layers
+        })
+        print(f"[DEBUG] Polígono añadido. _excl_polys: {len(self._excl_polys)}, _mission_exclusions: {len(self._mission_exclusions)}")
 
         try:
             if hasattr(self.dron, "add_exclusion_poly"):
@@ -3123,6 +3208,11 @@ class MiniRemoteApp:
         if not path:
             return
 
+        print(f"[DEBUG _save_template] Círculos: {len(self._excl_circles)}")
+        print(f"[DEBUG _save_template] Polígonos: {len(self._excl_polys)}")
+        for i, p in enumerate(self._excl_polys):
+            print(f"  Poly {i}: {p}")
+
         data = {
             "circles": self._excl_circles,
             "polygons": self._excl_polys,
@@ -3156,6 +3246,10 @@ class MiniRemoteApp:
 
             self._excl_circles = data.get("circles", [])
             self._excl_polys = data.get("polygons", [])
+            print(f"[DEBUG _load_template] Círculos cargados: {len(self._excl_circles)}")
+            print(f"[DEBUG _load_template] Polígonos cargados: {len(self._excl_polys)}")
+            for i, p in enumerate(self._excl_polys):
+                print(f"  Poly {i}: {p}")
 
             try:
                 self._incl_rect = data.get("inclusion")
@@ -3801,6 +3895,11 @@ class MiniRemoteApp:
 
         media = self._gallery_media_list[index]
 
+        # Videos: abrir con visor de Windows
+        if media["type"] == "video":
+            self._open_external(media["path"])
+            return
+
         viewer = tk.Toplevel(self._gallery_win)
         viewer.title("Visor")
         viewer.geometry("900x700")
@@ -4312,6 +4411,36 @@ class MiniRemoteApp:
         tk.Label(scenario_content, textvariable=self._scenario_name_var, bg=BG_CARD,
                  font=("Arial", 8, "italic"), fg="#666").pack(anchor="w", pady=2)
 
+        # Separador visual
+        tk.Frame(scenario_content, height=1, bg="#ccc").pack(fill="x", pady=4)
+
+        # Combo para seleccionar plan de vuelo (del escenario seleccionado)
+        plan_row = tk.Frame(scenario_content, bg=BG_CARD)
+        plan_row.pack(fill="x", pady=2)
+        tk.Label(plan_row, text="Plan:", bg=BG_CARD, font=("Arial", 8)).pack(side="left")
+
+        self._plan_combo_var = tk.StringVar(value="")
+        self._plan_combo = ttk.Combobox(plan_row, textvariable=self._plan_combo_var,
+                                        width=18, state="readonly")
+        self._plan_combo.pack(side="left", padx=4)
+        self._plan_combo.bind("<<ComboboxSelected>>", self._on_plan_selected)
+
+        # Mini-canvas de preview del plan
+        self._plan_preview_canvas = tk.Canvas(scenario_content, width=120, height=80,
+                                               bg="#f8f9fa", highlightthickness=1,
+                                               highlightbackground="#dee2e6")
+        self._plan_preview_canvas.pack(pady=4)
+        self._plan_preview_canvas.create_text(60, 40, text="Sin plan", fill="#aaa",
+                                               font=("Arial", 8), tags="placeholder")
+
+        # Botones de plan: Cargar y Guardar
+        plan_btns = tk.Frame(scenario_content, bg=BG_CARD)
+        plan_btns.pack(fill="x", pady=2)
+        tk.Button(plan_btns, text="📂 Cargar Plan", command=self._load_selected_plan,
+                  bg="#6f42c1", fg="white", font=("Arial", 8), bd=0).pack(side="left", fill="x", expand=True, padx=2)
+        tk.Button(plan_btns, text="💾 Guardar Plan", command=self._save_plan_to_scenario,
+                  bg="#fd7e14", fg="white", font=("Arial", 8), bd=0).pack(side="left", fill="x", expand=True, padx=2)
+
         # Refrescar lista al inicio
         self._refresh_scenario_list()
 
@@ -4544,27 +4673,6 @@ class MiniRemoteApp:
                   activebackground="#218838", cursor="hand2").pack(fill="x", padx=2, pady=(6, 4))
 
         # ═══════════════════════════════════════════════════════════════════
-        # SECCIÓN: PLANTILLAS
-        # ═══════════════════════════════════════════════════════════════════
-        card_plantillas = tk.Frame(side_panel, bg=BG_CARD, bd=1, relief="solid")
-        card_plantillas.pack(fill="x", padx=4, pady=4)
-
-        tk.Label(card_plantillas, text="  PLANTILLAS", font=("Arial", 9, "bold"),
-                 bg=BG_HEADER, fg=FG_HEADER, anchor="w").pack(fill="x", ipady=4)
-
-        content_plantillas = tk.Frame(card_plantillas, bg=BG_CARD)
-        content_plantillas.pack(fill="x", padx=8, pady=8)
-
-        btn_frame_plantillas = tk.Frame(content_plantillas, bg=BG_CARD)
-        btn_frame_plantillas.pack(fill="x")
-        tk.Button(btn_frame_plantillas, text="💾 Guardar", command=self._save_mission_template,
-                  bg="#28a745", fg="white", font=("Arial", 8), bd=0,
-                  activebackground="#218838").pack(side="left", fill="x", expand=True, padx=2)
-        tk.Button(btn_frame_plantillas, text="📂 Cargar", command=self._load_mission_template,
-                  bg="#17a2b8", fg="white", font=("Arial", 8), bd=0,
-                  activebackground="#138496").pack(side="left", fill="x", expand=True, padx=2)
-
-        # ═══════════════════════════════════════════════════════════════════
         # SECCIÓN: PLAN DE VUELO
         # ═══════════════════════════════════════════════════════════════════
         card_wp = tk.Frame(side_panel, bg=BG_CARD, bd=1, relief="solid")
@@ -4658,6 +4766,8 @@ class MiniRemoteApp:
         self._action_rotate_deg = tk.IntVar(value=90)
         self._action_wait = tk.BooleanVar(value=False)
         self._action_wait_sec = tk.IntVar(value=2)
+        self._action_layer_up = tk.BooleanVar(value=False)
+        self._action_layer_down = tk.BooleanVar(value=False)
 
         # Foto
         af1 = tk.Frame(actions_content, bg=BG_CARD)
@@ -4707,6 +4817,18 @@ class MiniRemoteApp:
         tk.Entry(af4, textvariable=self._action_wait_sec, width=3).pack(side="left", padx=2)
         tk.Label(af4, text="seg", bg=BG_CARD, font=("Arial", 8)).pack(side="left")
 
+        # Cambiar de capa
+        af5 = tk.Frame(actions_content, bg=BG_CARD)
+        af5.pack(fill="x", pady=1)
+        self._cb_layer_up = tk.Checkbutton(af5, text="⬆ Subir capa", variable=self._action_layer_up,
+                       bg=BG_CARD, activebackground=BG_CARD, font=("Arial", 8), fg="#007bff",
+                       command=self._on_layer_change)
+        self._cb_layer_up.pack(side="left")
+        self._cb_layer_down = tk.Checkbutton(af5, text="⬇ Bajar capa", variable=self._action_layer_down,
+                       bg=BG_CARD, activebackground=BG_CARD, font=("Arial", 8), fg="#fd7e14",
+                       command=self._on_layer_change)
+        self._cb_layer_down.pack(side="left", padx=(10, 0))
+
         # ═══════════════════════════════════════════════════════════════════
         # SECCIÓN: EJECUTAR
         # ═══════════════════════════════════════════════════════════════════
@@ -4718,12 +4840,6 @@ class MiniRemoteApp:
 
         exec_content = tk.Frame(card_exec, bg=BG_CARD)
         exec_content.pack(fill="x", padx=8, pady=8)
-
-        # Opciones de misión
-        self._mission_return_home_var = tk.BooleanVar(value=True)
-        tk.Checkbutton(exec_content, text="🏠 Volver a casa (0,0) al final",
-                       variable=self._mission_return_home_var, bg=BG_CARD,
-                       font=("Arial", 8), activebackground=BG_CARD).pack(anchor="w", pady=2)
 
         self._mission_status_label = tk.Label(exec_content, text="Estado: Listo",
                                                bg=BG_CARD, font=("Arial", 8), fg="#333")
@@ -5052,6 +5168,10 @@ class MiniRemoteApp:
                     icons.append("🔄")
                 if wp.get('wait'):
                     icons.append("⏱")
+                if wp.get('layer_up'):
+                    icons.append("⬆")
+                if wp.get('layer_down'):
+                    icons.append("⬇")
                 if icons:
                     self._mission_canvas.create_text(cx, cy + 18, text="".join(icons),
                                                       font=("Arial", 7))
@@ -5251,7 +5371,9 @@ class MiniRemoteApp:
                 'rotate': False,
                 'rotate_deg': 0,
                 'wait': False,
-                'wait_sec': 0
+                'wait_sec': 0,
+                'layer_up': False,
+                'layer_down': False
             }
             self._mission_waypoints.append(wp)
             self._update_wp_listbox()
@@ -5261,8 +5383,11 @@ class MiniRemoteApp:
             r = self._mission_obs_radius.get()
             zmin, zmax = self._get_mission_layer_z_range()
             selected_layers = self._get_mission_selected_layers()
-            obs = {'type': 'circle', 'cx': round(wx, 1), 'cy': round(wy, 1), 'r': r, 'zmin': zmin, 'zmax': zmax, 'layers': selected_layers}
+            cx, cy = round(wx, 1), round(wy, 1)
+            obs = {'type': 'circle', 'cx': cx, 'cy': cy, 'r': r, 'zmin': zmin, 'zmax': zmax, 'layers': selected_layers}
             self._mission_exclusions.append(obs)
+            # Sincronizar con Abrir Mapa
+            self._excl_circles.append({'cx': cx, 'cy': cy, 'r': r, 'zmin': zmin, 'zmax': zmax, 'layers': selected_layers})
             self._draw_mission_map()
 
         elif tool == "obs_rect":
@@ -5271,13 +5396,17 @@ class MiniRemoteApp:
                 p1, p2 = self._mission_rect_points
                 zmin, zmax = self._get_mission_layer_z_range()
                 selected_layers = self._get_mission_selected_layers()
+                x1, y1 = min(p1[0], p2[0]), min(p1[1], p2[1])
+                x2, y2 = max(p1[0], p2[0]), max(p1[1], p2[1])
                 obs = {
                     'type': 'rect',
-                    'x1': min(p1[0], p2[0]), 'y1': min(p1[1], p2[1]),
-                    'x2': max(p1[0], p2[0]), 'y2': max(p1[1], p2[1]),
+                    'x1': x1, 'y1': y1, 'x2': x2, 'y2': y2,
                     'zmin': zmin, 'zmax': zmax, 'layers': selected_layers
                 }
                 self._mission_exclusions.append(obs)
+                # Sincronizar con Abrir Mapa (como polígono)
+                rect_poly = [(x1, y1), (x2, y1), (x2, y2), (x1, y2)]
+                self._excl_polys.append({'poly': rect_poly, 'zmin': zmin, 'zmax': zmax, 'layers': selected_layers})
                 self._mission_rect_points.clear()
             self._draw_mission_map()
 
@@ -5472,8 +5601,11 @@ class MiniRemoteApp:
         if n_points >= 3:
             zmin, zmax = self._get_mission_layer_z_range()
             selected_layers = self._get_mission_selected_layers()
-            obs = {'type': 'poly', 'points': list(self._mission_poly_points), 'zmin': zmin, 'zmax': zmax, 'layers': selected_layers}
+            poly_points = list(self._mission_poly_points)
+            obs = {'type': 'poly', 'points': poly_points, 'zmin': zmin, 'zmax': zmax, 'layers': selected_layers}
             self._mission_exclusions.append(obs)
+            # Sincronizar con Abrir Mapa
+            self._excl_polys.append({'poly': poly_points, 'zmin': zmin, 'zmax': zmax, 'layers': selected_layers})
             self._mission_poly_points.clear()
             self._draw_mission_map()
         elif n_points > 0:
@@ -5601,10 +5733,240 @@ class MiniRemoteApp:
             self._scenario_combo['values'] = names
             if names and not self._scenario_combo_var.get():
                 self._scenario_combo_var.set(names[0])
+                # Cargar el escenario seleccionado automáticamente
+                self._on_scenario_selected()
 
     def _on_scenario_selected(self, event=None):
-        """Maneja selección de escenario en el combo."""
-        pass  # Solo informativo, cargar con botón
+        """Maneja selección de escenario en el combo - carga escenario y sus planes."""
+        selected_name = self._scenario_combo_var.get()
+        if not selected_name:
+            return
+
+        # Obtener ID del escenario
+        scenario_id = None
+        if hasattr(self, "_scenario_display_map"):
+            scenario_id = self._scenario_display_map.get(selected_name)
+
+        if not scenario_id:
+            return
+
+        # Cargar escenario (geofence, capas, obstáculos)
+        scenario = self._scenario_manager.load_scenario(scenario_id)
+        if scenario:
+            self._apply_scenario(scenario, scenario_id=scenario_id)
+
+            # Poblar dropdown de planes de este escenario
+            self._populate_plans_combo(scenario_id)
+
+    def _populate_plans_combo(self, scenario_id):
+        """Pobla el combo de planes con los planes del escenario seleccionado."""
+        if not hasattr(self, '_plan_combo'):
+            return
+
+        plans = self._scenario_manager.list_flight_plans(scenario_id)
+        self._plan_list = plans
+        self._plan_display_map = {}
+
+        names = ["(nuevo plan)"]  # Opción para crear nuevo
+        for p in plans:
+            display = f"{p['nombre']} ({p['num_waypoints']} WPs)"
+            names.append(display)
+            self._plan_display_map[display] = p['id']
+
+        self._plan_combo['values'] = names
+        self._plan_combo_var.set(names[0] if names else "")
+
+    def _on_plan_selected(self, event=None):
+        """Maneja selección de plan en el combo - muestra preview."""
+        self._draw_plan_preview()
+
+    def _draw_plan_preview(self):
+        """Dibuja un preview del plan seleccionado en el mini-canvas."""
+        if not hasattr(self, '_plan_preview_canvas'):
+            return
+
+        canvas = self._plan_preview_canvas
+        canvas.delete("all")
+
+        selected = self._plan_combo_var.get()
+        if not selected or selected == "(nuevo plan)":
+            canvas.create_text(60, 40, text="Sin plan", fill="#aaa",
+                              font=("Arial", 8))
+            return
+
+        # Obtener waypoints del plan
+        if not hasattr(self, '_current_scenario_id') or not self._current_scenario_id:
+            canvas.create_text(60, 40, text="Sin escenario", fill="#aaa",
+                              font=("Arial", 8))
+            return
+
+        plan_id = getattr(self, '_plan_display_map', {}).get(selected)
+        if not plan_id:
+            return
+
+        plan_data = self._scenario_manager.get_flight_plan(self._current_scenario_id, plan_id)
+        if not plan_data or 'waypoints' not in plan_data:
+            canvas.create_text(60, 40, text="Plan vacío", fill="#aaa",
+                              font=("Arial", 8))
+            return
+
+        waypoints = plan_data['waypoints']
+        if not waypoints:
+            canvas.create_text(60, 40, text="Sin waypoints", fill="#aaa",
+                              font=("Arial", 8))
+            return
+
+        # Calcular bounds para escalar (usando mismo sistema que Editor de Misiones)
+        # En el editor: X mundo = arriba, Y mundo = derecha
+        # En canvas: X canvas = derecha (basado en Y mundo), Y canvas = arriba (basado en X mundo invertido)
+        xs = [wp.get('x', 0) for wp in waypoints]
+        ys = [wp.get('y', 0) for wp in waypoints]
+        min_x, max_x = min(xs), max(xs)
+        min_y, max_y = min(ys), max(ys)
+
+        # Añadir margen
+        margin = 10
+        w, h = 120 - 2*margin, 80 - 2*margin
+
+        # Calcular escala (intercambiando rangos para que coincida con el editor)
+        range_x = max_x - min_x if max_x != min_x else 1
+        range_y = max_y - min_y if max_y != min_y else 1
+        # El ancho del canvas usa range_y, el alto usa range_x
+        scale = min(w / range_y, h / range_x)
+
+        # Centrar
+        offset_x = margin + (w - range_y * scale) / 2
+        offset_y = margin + (h - range_x * scale) / 2
+
+        def to_canvas(wx, wy):
+            # Mismo sistema que _mission_world_to_canvas:
+            # Y mundo → X canvas (derecha)
+            # X mundo → Y canvas (arriba, invertido)
+            cx = offset_x + (wy - min_y) * scale
+            cy = offset_y + (max_x - wx) * scale
+            return cx, cy
+
+        # Dibujar líneas entre waypoints (mismo estilo que Editor de Misiones)
+        points = [to_canvas(wp.get('x', 0), wp.get('y', 0)) for wp in waypoints]
+        if len(points) > 1:
+            for i in range(len(points) - 1):
+                canvas.create_line(points[i][0], points[i][1],
+                                  points[i+1][0], points[i+1][1],
+                                  fill="#17a2b8", width=1, arrow=tk.LAST)
+
+        # Dibujar waypoints (mismo estilo que Editor de Misiones: azul con número)
+        for i, (cx, cy) in enumerate(points):
+            r = 6
+            canvas.create_oval(cx-r, cy-r, cx+r, cy+r,
+                              fill="#17a2b8", outline="white", width=1)
+            canvas.create_text(cx, cy, text=str(i + 1),
+                              font=("Arial", 6, "bold"), fill="white")
+
+    def _load_selected_plan(self):
+        """Carga los waypoints del plan seleccionado al editor."""
+        if not hasattr(self, '_current_scenario_id') or not self._current_scenario_id:
+            messagebox.showwarning("Plan", "Primero selecciona un escenario.")
+            return
+
+        selected = self._plan_combo_var.get()
+        if not selected or selected == "(nuevo plan)":
+            # Limpiar waypoints para nuevo plan
+            self._mission_waypoints = []
+            self._wp_selected_idx = None
+            self._update_wp_listbox()
+            self._draw_mission_map()
+            messagebox.showinfo("Plan", "Editor listo para crear nuevo plan.")
+            return
+
+        plan_id = self._plan_display_map.get(selected)
+        if not plan_id:
+            return
+
+        # Obtener waypoints del plan
+        plan_data = self._scenario_manager.get_flight_plan(self._current_scenario_id, plan_id)
+        if plan_data and 'waypoints' in plan_data:
+            self._mission_waypoints = plan_data['waypoints']
+            self._mission_template_name = plan_data.get('nombre', plan_id)
+            self._wp_selected_idx = None
+            self._update_wp_listbox()
+            self._draw_mission_map()
+            messagebox.showinfo("Plan", f"Plan '{plan_data.get('nombre', plan_id)}' cargado con {len(self._mission_waypoints)} waypoints.")
+        else:
+            messagebox.showerror("Plan", "No se pudo cargar el plan.")
+
+    def _save_plan_to_scenario(self):
+        """Guarda los waypoints actuales como plan en el escenario seleccionado."""
+        if not hasattr(self, '_current_scenario_id') or not self._current_scenario_id:
+            messagebox.showwarning("Plan", "Primero selecciona un escenario.")
+            return
+
+        if not self._mission_waypoints:
+            messagebox.showwarning("Plan", "No hay waypoints para guardar.")
+            return
+
+        # Pedir nombre del plan
+        parent = getattr(self, '_mission_win', None) or self.root
+        dialog = tk.Toplevel(parent)
+        dialog.title("Guardar Plan de Vuelo")
+        dialog.geometry("320x150")
+        dialog.resizable(False, False)
+        dialog.transient(parent)
+        dialog.grab_set()
+
+        # Centrar diálogo en la ventana padre
+        dialog.update_idletasks()
+        x = parent.winfo_x() + (parent.winfo_width() // 2) - 160
+        y = parent.winfo_y() + (parent.winfo_height() // 2) - 75
+        dialog.geometry(f"+{x}+{y}")
+
+        tk.Label(dialog, text="Nombre del plan:", font=("Arial", 10)).pack(pady=(15, 5))
+        entry = tk.Entry(dialog, width=35, font=("Arial", 10))
+        entry.pack(pady=5, padx=15)
+        default_name = getattr(self, '_mission_template_name', '') or ''
+        if default_name:
+            entry.insert(0, default_name)
+        entry.focus_set()
+        if default_name:
+            entry.select_range(0, tk.END)
+
+        def do_save():
+            nombre = entry.get().strip()
+            if not nombre:
+                messagebox.showwarning("Plan", "El nombre no puede estar vacío.", parent=dialog)
+                return
+
+            # Generar ID del plan
+            plan_id = nombre.lower().replace(" ", "_")
+            plan_id = ''.join(c for c in plan_id if c.isalnum() or c == '_')
+
+            # Guardar plan en el escenario
+            success = self._scenario_manager.add_flight_plan(
+                self._current_scenario_id,
+                plan_id,
+                nombre,
+                self._mission_waypoints
+            )
+
+            if success:
+                self._mission_template_name = nombre
+                # Refrescar combo de planes
+                self._populate_plans_combo(self._current_scenario_id)
+                dialog.destroy()
+                messagebox.showinfo("Plan", f"Plan '{nombre}' guardado en escenario.")
+            else:
+                messagebox.showerror("Plan", "Error guardando el plan.", parent=dialog)
+
+        # Botones
+        btn_frame = tk.Frame(dialog)
+        btn_frame.pack(pady=15)
+        tk.Button(btn_frame, text="💾 Guardar", command=do_save,
+                  bg="#28a745", fg="white", font=("Arial", 10), width=10).pack(side="left", padx=5)
+        tk.Button(btn_frame, text="Cancelar", command=dialog.destroy,
+                  font=("Arial", 10), width=10).pack(side="left", padx=5)
+
+        # Atajos de teclado
+        dialog.bind("<Return>", lambda e: do_save())
+        dialog.bind("<Escape>", lambda e: dialog.destroy())
 
     def _apply_scenario(self, scenario, scenario_id=None, source="editor"):
         """
@@ -5938,12 +6300,16 @@ class MiniRemoteApp:
         }
 
         # ─────────────────────────────────────────────────────────────────────
-        # OBSTÁCULOS (usar el formato que tenga datos)
+        # OBSTÁCULOS (combinar ambos formatos)
         # ─────────────────────────────────────────────────────────────────────
         circles = []
         polygons = []
 
-        # Priorizar _mission_exclusions si tiene datos (Editor)
+        print(f"[DEBUG _build_scenario_data] _mission_exclusions: {len(getattr(self, '_mission_exclusions', []))}")
+        print(f"[DEBUG _build_scenario_data] _excl_circles: {len(getattr(self, '_excl_circles', []))}")
+        print(f"[DEBUG _build_scenario_data] _excl_polys: {len(getattr(self, '_excl_polys', []))}")
+
+        # Usar _mission_exclusions si tiene datos (Editor)
         if hasattr(self, '_mission_exclusions') and self._mission_exclusions:
             for exc in self._mission_exclusions:
                 if exc.get('type') == 'circle':
@@ -6021,7 +6387,17 @@ class MiniRemoteApp:
         # Contenido
         tk.Label(dialog, text="Nombre del escenario:", font=("Arial", 10)).pack(pady=(15, 5))
         entry = tk.Entry(dialog, width=35, font=("Arial", 10))
-        entry.insert(0, "Nuevo Escenario")
+        # Usar nombre actual si existe, sino "Nuevo Escenario"
+        default_name = "Nuevo Escenario"
+        if hasattr(self, '_current_scenario_id') and self._current_scenario_id:
+            # Intentar obtener el nombre del escenario actual
+            try:
+                scenario = self._scenario_manager.load_scenario(self._current_scenario_id)
+                if scenario and scenario.get('nombre'):
+                    default_name = scenario['nombre']
+            except:
+                default_name = self._current_scenario_id
+        entry.insert(0, default_name)
         entry.pack(pady=5)
         entry.select_range(0, tk.END)
         entry.focus_set()
@@ -6044,7 +6420,7 @@ class MiniRemoteApp:
                 if include_waypoints and self._mission_waypoints:
                     self._scenario_manager.add_flight_plan(
                         scenario_id, "plan_editor", "Plan desde Editor",
-                        self._mission_waypoints, return_home=False
+                        self._mission_waypoints
                     )
 
                 self._current_scenario_id = scenario_id
@@ -6129,6 +6505,10 @@ class MiniRemoteApp:
                 actions.append(f"🔄{wp.get('rotate_deg', 0)}°")
             if wp.get('wait'):
                 actions.append(f"⏱{wp.get('wait_sec', 0)}s")
+            if wp.get('layer_up'):
+                actions.append("⬆Capa")
+            if wp.get('layer_down'):
+                actions.append("⬇Capa")
             action_str = " ".join(actions) if actions else ""
             self._wp_listbox.insert(tk.END, f"WP{i + 1}: ({wp['x']}, {wp['y']}, {wp['z']}) {action_str}")
 
@@ -6161,6 +6541,8 @@ class MiniRemoteApp:
         self._action_rotate_deg.set(wp.get('rotate_deg', 90))
         self._action_wait.set(wp.get('wait', False))
         self._action_wait_sec.set(wp.get('wait_sec', 2))
+        self._action_layer_up.set(wp.get('layer_up', False))
+        self._action_layer_down.set(wp.get('layer_down', False))
 
         # Actualizar estado de exclusión mutua de video
         self._update_video_checkbox_states()
@@ -6183,6 +6565,8 @@ class MiniRemoteApp:
         wp['rotate_deg'] = self._action_rotate_deg.get()
         wp['wait'] = self._action_wait.get()
         wp['wait_sec'] = self._action_wait_sec.get()
+        wp['layer_up'] = self._action_layer_up.get()
+        wp['layer_down'] = self._action_layer_down.get()
 
         self._update_wp_listbox()
         self._draw_mission_map()
@@ -6219,6 +6603,21 @@ class MiniRemoteApp:
             self._entry_video_dur.configure(state="normal")
             self._cb_video_start.configure(state="normal")
             self._cb_video_stop.configure(state="normal")
+
+    def _on_layer_change(self):
+        """Hace que subir/bajar capa sean mutuamente excluyentes."""
+        # Si se activa "Subir capa", desactivar "Bajar capa"
+        if self._action_layer_up.get() and self._action_layer_down.get():
+            # Se acaba de activar uno, desactivar el otro
+            # Detectar cuál se activó último mirando el widget que disparó el evento
+            pass  # Ambos no pueden estar activos a la vez
+
+        if self._action_layer_up.get():
+            self._action_layer_down.set(False)
+        elif self._action_layer_down.get():
+            self._action_layer_up.set(False)
+
+        self._update_wp_actions()
 
     def _apply_wp_coords(self):
 
@@ -6311,11 +6710,9 @@ class MiniRemoteApp:
             messagebox.showwarning("Sin waypoints", "Añade al menos un waypoint", parent=self._mission_win)
             return
 
-        return_home = self._mission_return_home_var.get() if hasattr(self, '_mission_return_home_var') else False
-
         # Validar rutas contra obstáculos
         try:
-            valid, error = validate_mission_paths(self._mission_waypoints, self._mission_exclusions, return_home)
+            valid, error = validate_mission_paths(self._mission_waypoints, self._mission_exclusions)
         except Exception as e:
             self._mission_status_label.configure(text=f"❌ Error: {e}", fg="#dc3545")
             return
@@ -6345,9 +6742,6 @@ class MiniRemoteApp:
         if self._mission_running:
             messagebox.showinfo("En ejecución", "Ya hay una misión en ejecución")
             return
-
-        # Obtener opciones
-        return_home = self._mission_return_home_var.get() if hasattr(self, '_mission_return_home_var') else False
 
         # Si hay vídeos en la misión, mantener el stream vivo con FPV para evitar cortes
         has_video = any(wp.get('video') or wp.get('video_start') for wp in self._mission_waypoints)
@@ -6382,10 +6776,9 @@ class MiniRemoteApp:
         # DEBUG: Mostrar información de validación
         print(f"[DEBUG] Waypoints: {len(self._mission_waypoints)}")
         print(f"[DEBUG] Obstáculos: {len(self._mission_exclusions)}")
-        print(f"[DEBUG] Return home: {return_home}")
 
         # Validar rutas contra obstáculos (usa módulo tello_geometry)
-        valid, error = validate_mission_paths(self._mission_waypoints, self._mission_exclusions, return_home)
+        valid, error = validate_mission_paths(self._mission_waypoints, self._mission_exclusions)
         print(f"[DEBUG] Validación: valid={valid}, error={error}")
 
         # Si la ruta no es válida, mostrar error y no ejecutar
@@ -6425,7 +6818,6 @@ class MiniRemoteApp:
             confirm_msg += f"\n📷 Fotos programadas: {n_photos}"
         if n_videos > 0:
             confirm_msg += f"\n🎥 Videos programados: {n_videos}"
-        confirm_msg += f"\n🏠 Volver a casa: {'Sí' if return_home else 'No'}"
         confirm_msg += f"\n\n¿Iniciar misión?"
 
         if not messagebox.askyesno("Confirmar Misión", confirm_msg, parent=self._mission_win):
@@ -6710,39 +7102,32 @@ class MiniRemoteApp:
         # Iniciar el timer de actualización del mapa
         self._mission_win.after(100, update_map_timer)
 
-        # Determinar si usar return_home en el módulo de misión
-        # Si usamos path planning Y return_home estaba activado, el path planning
-        # ya añadió waypoints de vuelta a (0,0), así que no duplicamos
-        if waypoints_to_execute is not self._mission_waypoints and return_home:
-            # Path planning usado con return_home: verificar si termina en (0,0)
-            last_wp = waypoints_to_execute[-1] if waypoints_to_execute else None
-            if last_wp:
-                last_x = last_wp.get('x', 0)
-                last_y = last_wp.get('y', 0)
-                # Si el último waypoint ya es (0,0) o muy cerca, no hacer RTH
-                if abs(last_x) < 15 and abs(last_y) < 15:
-                    use_return_home = False
-                    print(f"[DEBUG] Path planning terminó en ({last_x}, {last_y}), RTH ya incluido")
-                else:
-                    # Path planning no terminó en origen, activar RTH
-                    use_return_home = True
-                    print(f"[DEBUG] Path planning terminó en ({last_x}, {last_y}), activando RTH")
-            else:
-                use_return_home = return_home
+        # Obtener configuración de capas para acciones layer_up/layer_down
+        c1_max = getattr(self, '_layer1_max_var', None)
+        c2_max = getattr(self, '_layer2_max_var', None)
+        c3_max = getattr(self, '_layer3_max_var', None)
+        if c1_max and c2_max and c3_max:
+            mission_layers = [
+                {"z_min": 0, "z_max": c1_max.get()},
+                {"z_min": c1_max.get(), "z_max": c2_max.get()},
+                {"z_min": c2_max.get(), "z_max": c3_max.get()},
+            ]
         else:
-            # Sin path planning: usar el valor original
-            use_return_home = return_home
+            # Valores por defecto
+            mission_layers = [
+                {"z_min": 0, "z_max": 60},
+                {"z_min": 60, "z_max": 120},
+                {"z_min": 120, "z_max": 200},
+            ]
 
-        print(f"[DEBUG] use_return_home final: {use_return_home}")
-
-        # Ejecutar misión (el módulo maneja todo: navegación, acciones, return_home)
+        # Ejecutar misión
         def run_in_thread():
             try:
                 self.dron.run_mission(
                     waypoints=waypoints_to_execute,
                     do_land=True,
-                    return_home=use_return_home,
                     face_target=True,  # Rotar hacia destino antes de moverse (como un coche)
+                    layers=mission_layers,
                     blocking=True,
                     on_wp=on_wp_arrived,
                     on_action=on_action,

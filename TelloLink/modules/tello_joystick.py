@@ -168,7 +168,7 @@ class JoystickController:
         return self.joystick.get_button(button_index)
 
     def disconnect(self):
-        """Desconecta el joystick de forma segura."""
+
         with self._lock:
             self._disconnecting = True
             try:

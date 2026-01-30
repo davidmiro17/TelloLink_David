@@ -1,5 +1,4 @@
-# tello_pose.py - Actualizado 2025-12-09
-# Añadido atributos vx/vy/vz para flecha de velocidad
+
 import  math
 from dataclasses import dataclass
 
@@ -63,12 +62,7 @@ class PoseVirtual:
         self.yaw_deg = _wrap_deg(self.yaw_deg + float(delta_deg))
 
     def update_move(self, direction: str, dist_cm: float) -> None:
-        """
-        Actualiza la pose tras un movimiento.
-        Sistema de coordenadas:
-        - yaw=0 → forward apunta a +X
-        - yaw=0 → right apunta a +Y
-        """
+
         d = float(dist_cm)
         yaw = math.radians(self.yaw_deg)  # usamos el yaw RELATIVO
 

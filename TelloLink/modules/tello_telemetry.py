@@ -73,9 +73,9 @@ def _telemetry_loop(self, period_s: float):
         except Exception:
             pass
 
-        # WiFi (0..100 aprox)
+        # WiFi SNR (Signal-to-Noise Ratio)
         try:
-            w = self._tello.get_wifi()
+            w = self._tello.query_wifi_signal_noise_ratio()
             if w is not None:
                 self.wifi = int(w)
         except Exception:

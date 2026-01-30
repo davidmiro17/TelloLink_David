@@ -61,10 +61,19 @@ class SessionManager:
             return
 
         session_path = os.path.join(self.base_dir, self._current_session)
+
+        # Asegurar que la carpeta de sesión existe
+        if not os.path.exists(session_path):
+            os.makedirs(os.path.join(session_path, "fotos"), exist_ok=True)
+            os.makedirs(os.path.join(session_path, "videos"), exist_ok=True)
+
         json_path = os.path.join(session_path, "session.json")
 
-        with open(json_path, "w", encoding="utf-8") as f:
-            json.dump(self._session_data, f, indent=2, ensure_ascii=False)
+        try:
+            with open(json_path, "w", encoding="utf-8") as f:
+                json.dump(self._session_data, f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            print(f"[Session] Error guardando metadata: {e}")
 
     def get_photo_path(self, filename: Optional[str] = None) -> str:
 

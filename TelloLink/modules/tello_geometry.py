@@ -197,7 +197,6 @@ def get_obstacle_description(obs: Dict[str, Any]) -> str:
 #Función que valida que toda la misión no cruce ningún obstáculo
 def validate_mission_paths(waypoints: List[Dict[str, Any]],
                            obstacles: List[Dict[str, Any]],
-                           return_home: bool = False,
                            starting_z: float = 50.0) -> Tuple[bool, Optional[str]]:
 
     if not waypoints:
@@ -229,16 +228,5 @@ def validate_mission_paths(waypoints: List[Dict[str, Any]],
         # Actualizar altura actual
         if z2 is not None:
             current_z = z2
-
-    # Comprobar ruta de vuelta a casa si está activado
-    if return_home and waypoints:
-        last_wp = waypoints[-1]
-        last_z = last_wp.get('z')
-        last_z_val = last_z if last_z is not None else current_z
-        for obs in obstacles:
-            # Volver a casa a la altura actual
-            if line_intersects_obstacle(last_wp['x'], last_wp['y'], 0, 0, obs,
-                                        z1=last_z_val, z2=last_z_val):
-                return False, f"Ruta de vuelta a casa cruza {get_obstacle_description(obs)}"
 
     return True, None

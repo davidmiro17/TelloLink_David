@@ -69,11 +69,20 @@ def _rel_from_abs(self, wp_abs: Dict[str, Any]) -> tuple[float, float, float]:
     return dx, dy, dz
 
 
+def _get_layer_for_z(z: float, layers: List[Dict[str, Any]]) -> int:
+    """Determina en qué capa está una altura z. Retorna índice 0-based."""
+    for i, layer in enumerate(layers):
+        if layer["z_min"] <= z < layer["z_max"]:
+            return i
+    # Si está por encima de todas las capas, retorna la última
+    return len(layers) - 1
+
+
 def _mission_worker(self,
                     waypoints: List[Dict[str, Any]],
                     do_land: bool = True,
-                    return_home: bool = False,
                     face_target: bool = False,
+                    layers: Optional[List[Dict[str, Any]]] = None,
                     on_wp: Optional[Callable[[int, Dict[str, Any]], None]] = None,
                     on_action: Optional[Callable[[int, str], None]] = None,
                     on_finish: Optional[Callable[[], None]] = None) -> None:
@@ -252,6 +261,50 @@ def _mission_worker(self,
             if getattr(self, "_mission_abort", False):
                 break
 
+        # Acción: LAYER_UP (subir una capa)
+        if original_wp.get('layer_up', False) and layers:
+            current_z = float(self.pose.z_cm) if hasattr(self, 'pose') and self.pose else 50.0
+            current_layer = _get_layer_for_z(current_z, layers)
+            if current_layer < len(layers) - 1:
+                # Subir a la siguiente capa (al centro de la capa)
+                next_layer = layers[current_layer + 1]
+                target_z = (next_layer["z_min"] + next_layer["z_max"]) / 2
+                dz = target_z - current_z
+                print(f"[mission] WP{idx}: Subiendo de capa {current_layer + 1} → {current_layer + 2} (z={current_z:.0f} → {target_z:.0f}) ⬆")
+                if on_action:
+                    try:
+                        on_action(idx - 1, 'layer_up')
+                    except Exception:
+                        pass
+                try:
+                    self.goto_rel(dx_cm=0, dy_cm=0, dz_cm=dz, blocking=True)
+                except Exception as e:
+                    print(f"[mission] Error subiendo de capa: {e}")
+            else:
+                print(f"[mission] WP{idx}: Ya está en la capa más alta ({current_layer + 1})")
+
+        # Acción: LAYER_DOWN (bajar una capa)
+        if original_wp.get('layer_down', False) and layers:
+            current_z = float(self.pose.z_cm) if hasattr(self, 'pose') and self.pose else 50.0
+            current_layer = _get_layer_for_z(current_z, layers)
+            if current_layer > 0:
+                # Bajar a la capa anterior (al centro de la capa)
+                prev_layer = layers[current_layer - 1]
+                target_z = (prev_layer["z_min"] + prev_layer["z_max"]) / 2
+                dz = target_z - current_z
+                print(f"[mission] WP{idx}: Bajando de capa {current_layer + 1} → {current_layer} (z={current_z:.0f} → {target_z:.0f}) ⬇")
+                if on_action:
+                    try:
+                        on_action(idx - 1, 'layer_down')
+                    except Exception:
+                        pass
+                try:
+                    self.goto_rel(dx_cm=0, dy_cm=0, dz_cm=dz, blocking=True)
+                except Exception as e:
+                    print(f"[mission] Error bajando de capa: {e}")
+            else:
+                print(f"[mission] WP{idx}: Ya está en la capa más baja (1)")
+
         # Delay en el punto (con posible aborto) - delay original del waypoint
         if delay > 0:
             t0 = time.time()
@@ -262,42 +315,6 @@ def _mission_worker(self,
                 time.sleep(0.05)
             if getattr(self, "_mission_abort", False):
                 break
-
-    # Return to home: volver al origen (0,0) antes de aterrizar
-    if return_home and not getattr(self, "_mission_abort", False):
-        pose = getattr(self, "pose", None)
-        if pose is None:
-            print("[mission] WARNING: Pose no disponible, no se puede ejecutar RTH")
-            print("[mission] El dron aterrizará en su posición actual")
-        else:
-            # Obtener posición actual
-            current_x = getattr(pose, "x_cm", None)
-            current_y = getattr(pose, "y_cm", None)
-
-            # Verificar que tenemos valores válidos de posición
-            if current_x is None or current_y is None:
-                print("[mission] WARNING: Posición del dron desconocida (x o y es None)")
-                print("[mission] El dron aterrizará en su posición actual")
-            else:
-                # Calcular desplazamiento para volver a (0,0)
-                dx_home = -float(current_x or 0.0)
-                dy_home = -float(current_y or 0.0)
-
-                print(f"[mission] Posición actual: ({current_x:.1f}, {current_y:.1f})")
-                print(f"[mission] Desplazamiento a casa: dx={dx_home:.1f}, dy={dy_home:.1f}")
-
-                # Solo volver si estamos lejos del origen (más de 10cm)
-                if abs(dx_home) > 10 or abs(dy_home) > 10:
-                    print(f"[mission] Volviendo a casa (0, 0)...")
-                    try:
-                        # Siempre usar face_target=True para volver a casa mirando hacia adelante
-                        self.goto_rel(dx_cm=dx_home, dy_cm=dy_home, dz_cm=0,
-                                     face_target=True, blocking=True)
-                        print("[mission] RTH completado")
-                    except Exception as e:
-                        print(f"[mission] Error volviendo a casa: {e}")
-                else:
-                    print(f"[mission] Ya estamos cerca del origen ({abs(dx_home):.1f}, {abs(dy_home):.1f}), no es necesario RTH")
 
     # Final de misión
     if do_land:
@@ -317,15 +334,15 @@ def _mission_worker(self,
 def run_mission(self,
                 waypoints: List[Dict[str, Any]],
                 do_land: bool = True,
-                return_home: bool = False,
                 face_target: bool = False,
+                layers: Optional[List[Dict[str, Any]]] = None,
                 blocking: bool = True,
                 on_wp: Optional[Callable[[int, Dict[str, Any]], None]] = None,
                 on_action: Optional[Callable[[int, str], None]] = None,
                 on_finish: Optional[Callable[[], None]] = None) -> None:
 
     th = threading.Thread(target=_mission_worker,
-                          args=(self, waypoints, do_land, return_home, face_target, on_wp, on_action, on_finish),
+                          args=(self, waypoints, do_land, face_target, layers, on_wp, on_action, on_finish),
                           daemon=True)
     th.start()
     if blocking:

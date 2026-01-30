@@ -141,7 +141,7 @@ def _takeOff(self, altura_objetivo_m=0.5, blocking=True):
         return False
 
 #Función pública del despegue
-def takeOff(self, altura_objetivo_m=0.5, blocking=True):
+def takeOff(self, altura_objetivo_m=0.5, blocking=True, callback=None):
 
     if getattr(self, "_takeoff_in_progress", False):
         print("[takeOff] Ya hay un despegue en curso; ignoro la petición duplicada.")
@@ -151,14 +151,19 @@ def takeOff(self, altura_objetivo_m=0.5, blocking=True):
 
     if blocking:
         try:
-            return _takeOff(self, altura_objetivo_m, blocking=False)
+            result = _takeOff(self, altura_objetivo_m, blocking=False)
+            if callback and callable(callback):
+                callback(result)
+            return result
         finally:
             setattr(self, "_takeoff_in_progress", False)
     else:
         import threading
         def _runner():
             try:
-                _takeOff(self, altura_objetivo_m, False)
+                result = _takeOff(self, altura_objetivo_m, False)
+                if callback and callable(callback):
+                    callback(result)
             finally:
                 setattr(self, "_takeoff_in_progress", False)
 

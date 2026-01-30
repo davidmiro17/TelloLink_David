@@ -169,7 +169,7 @@ class ScenarioManager:
 
 
     def add_flight_plan(self, scenario_id: str, plan_id: str, nombre: str,
-                        waypoints: List[Dict], return_home: bool = False) -> bool:
+                        waypoints: List[Dict]) -> bool:
 
         scenario = self.load_scenario(scenario_id)
         if not scenario:
@@ -181,7 +181,6 @@ class ScenarioManager:
                 # Actualizar existente
                 plan["nombre"] = nombre
                 plan["waypoints"] = waypoints
-                plan["return_home"] = return_home
                 plan["modified"] = datetime.now().isoformat()
                 return self.save_scenario(scenario)
 
@@ -191,8 +190,7 @@ class ScenarioManager:
             "nombre": nombre,
             "created": datetime.now().isoformat(),
             "modified": datetime.now().isoformat(),
-            "waypoints": waypoints,
-            "return_home": return_home
+            "waypoints": waypoints
         }
 
         if "planes_vuelo" not in scenario:
@@ -291,8 +289,7 @@ class ScenarioManager:
                     scenario_id,
                     "plan_importado",
                     "Plan importado",
-                    data["waypoints"],
-                    return_home=False
+                    data["waypoints"]
                 )
 
             return self.load_scenario(scenario_id)

@@ -126,12 +126,13 @@ def _goto_rel_worker(self,
 
 
 def _get_real_yaw(self) -> Optional[float]:
-    """Lee el yaw REAL del dron desde el IMU."""
+    """Lee el yaw REAL del dron desde la pose (actualizada por telemetría)."""
     try:
-        if hasattr(self, "get_yaw"):
-            real_yaw = self.get_yaw()
-            if real_yaw is not None:
-                return float(real_yaw)
+        # Leer yaw relativo desde pose (actualizado por telemetría)
+        if hasattr(self, "pose") and self.pose is not None:
+            yaw = getattr(self.pose, "yaw_deg", None)
+            if yaw is not None:
+                return float(yaw)
     except Exception as e:
         print(f"[goto] Error leyendo yaw real: {e}")
     return None
