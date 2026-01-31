@@ -1,21 +1,21 @@
-# TelloDroneLinkPriv
+# TelloLink
 
-Proyecto completo de control de drones DJI Tello desarrollado como Trabajo de Fin de Grado en la EETAC (UPC). Incluye la librería modular **TelloLink** y una aplicación de demostración con interfaz gráfica que integra control manual, FPV, misiones automáticas, geofencing y gestión de escenarios.
+Proyecto completo de control de drones DJI Tello desarrollado como Trabajo de Fin de Grado en la EETAC (UPC). Incluye la librería  **TelloLink** y una aplicación de demostración con interfaz gráfica que integra control manual y misiones autónomas.
 
-Forma parte del **Tello Engineering Ecosystem**.
+
 
 ## Estructura del repositorio
 
 ```
 TelloDroneLinkPriv/
 ├── TelloLink/                 # Librería de control del dron
-│   ├── modules/               # 16 módulos especializados
-│   ├── tests/                 # Scripts de prueba unitarios
+│   ├── modules/               # 16 módulos 
+│   ├── tests/                 # Scripts de prueba 
 │   ├── docs/                  # Documentación de la librería
 │   ├── Tello.py               # Clase principal TelloDron
 │   └── __init__.py
 ├── demostradores/
-│   └── minidemotodo.py        # Aplicación de demostración completa
+│   └── minidemotodo.py        # Aplicación 
 ├── escenarios/                # Escenarios guardados (.json)
 └── Extensions/                # Extensiones adicionales
 ```
@@ -25,14 +25,14 @@ TelloDroneLinkPriv/
 - **Python 3.10+**
 - **DJI Tello** (compatible con Tello, Tello EDU y Tello Talent)
 - **Joystick** (opcional, cualquier mando compatible con pygame)
-- **Windows 10/11** (probado en Windows; Linux/macOS pueden requerir ajustes en el stream de vídeo)
+- **Windows 10/11** (probado en Windows)
 
 ## Instalación
 
 1. Clonar el repositorio:
 ```bash
-git clone https://github.com/davidmiro17/TelloDroneLinkPriv.git
-cd TelloDroneLinkPriv
+git clone https://github.com/davidmiro17/TelloLink_David.git
+cd TelloLink_David
 ```
 
 2. Instalar dependencias:
@@ -73,9 +73,9 @@ Se abrirá la ventana principal con los siguientes paneles:
 - Captura de fotos y grabación de vídeo
 
 **Ventanas adicionales:**
-- **Mapa y Geofence:** Visualización 2D de la posición del dron, definición de zonas seguras, obstáculos por capas y exclusiones (círculos, polígonos)
-- **Editor de Misiones:** Creación visual de rutas con waypoints, acciones automáticas (foto, vídeo, rotación, espera) y validación contra obstáculos
-- **Galería de Vuelos:** Navegación por sesiones de vuelo con visor de fotos y reproductor de vídeos integrado
+- **Mapa y Geofence:** Visualización de la posición del dron, definición de zonas seguras y obstáculos por capas (círculos, polígonos).
+- **Editor de Misiones:** Creación  de rutas con waypoints con acciones automáticas (foto, vídeo, rotación, espera, subir o bajar de capa).
+- **Galería de Vuelos:** Navegación por sesiones de vuelo con visor de fotos y vídeos
 
 ## Control con joystick
 
@@ -119,7 +119,7 @@ Cada escenario puede contener varios planes de vuelo reutilizables, lo que permi
 
 **El dron no despega**
 - Comprobar que la batería está por encima del 20%.
-- Asegurar que el dron está sobre una superficie con textura. El sensor de flujo óptico necesita patrones visuales en el suelo para estabilizarse; superficies lisas o brillantes causan inestabilidad.
+- Asegurar que el dron está sobre una superficie con textura. El sensor de flujo óptico necesita patrones visuales en el suelo para estabilizarse; superficies muy lisas o brillantes causan inestabilidad.
 - Verificar que no hay ningún objeto obstruyendo las hélices.
 
 **El vídeo FPV no aparece o se congela**
@@ -133,8 +133,7 @@ Cada escenario puede contener varios planes de vuelo reutilizables, lo que permi
 - Comprobar que pygame detecta el mando: `python -c "import pygame; pygame.init(); pygame.joystick.init(); print(pygame.joystick.get_count())"`.
 
 **Las coordenadas del dron derivan con el tiempo**
-- Esto es inherente al sistema de posicionamiento por flujo óptico (dead reckoning). El sensor acumula error progresivamente.
-- Para minimizar la deriva: volar sobre superficie texturizada, mantener buena iluminación y evitar vuelos prolongados sin recalibrar.
+- Esto es inherente al sistema de posicionamiento diseñado por flujo óptico (dead reckoning). El sensor acumula error progresivamente.
 
 **"shapely no está instalado"**
 - Instalar con `pip install shapely`. Esta librería es necesaria para la validación geométrica de rutas contra obstáculos en el editor de misiones.
@@ -145,7 +144,7 @@ Cada escenario puede contener varios planes de vuelo reutilizables, lo que permi
 
 ## Librería TelloLink
 
-La librería se puede usar de forma independiente sin la aplicación gráfica. La documentación completa está disponible en el repositorio [TelloLink](https://github.com/davidmiro17/TelloLink).
+La librería se puede usar de forma independiente sin la aplicación. La documentación completa está disponible en el repositorio [TelloLink](https://github.com/davidmiro17/TelloLink).
 
 Ejemplo de uso mínimo:
 
