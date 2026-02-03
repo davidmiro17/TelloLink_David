@@ -11,6 +11,5 @@ https://www.youtube.com/watch?v=rKT4veDU6SQ
 ## Demostración de la aplicación
 
 Demostración de la aplicación minidemotodo.py en funcionamiento:
-
-&nbsp;
+https://www.youtube.com/watch?v=VxAidbhtk5o
 
